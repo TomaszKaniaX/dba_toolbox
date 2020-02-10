@@ -30,12 +30,26 @@ select to_char(trunc(sysdate)-7,'&&DT_FMT_REP') as bdate, to_char(trunc(sysdate)
 set termout on
 prompt ==================================================================
 ACCEPT bdate  DEFAULT '&bdate'  PROMPT 'Enter start date [&bdate]: '
-ACCEPT edate  DEFAULT '&edate'  PROMPT 'Enter start date [&edate]: '
+ACCEPT edate  DEFAULT '&edate'  PROMPT 'Enter end date [&edate]: '
 ACCEPT nTopSqls DEFAULT '5'     PROMPT 'Top SQLs per snapshot [5]: '
 prompt ==================================================================
 set termout off
 
-select min(snap_id) as bsnap from stats$snapshot where snap_time > to_date('&&bdate','&&DT_FMT_REP');
+with b as ( 
+  select min(snap_id) snap_id from stats$snapshot s where snap_time > to_date('&&bdate','&&DT_FMT_REP')
+), 
+prev_snap as(
+  select max(snap_id) snap_id 
+	from stats$snapshot 
+	where snap_id < (select min(snap_id) from stats$snapshot s where snap_time > to_date('&&bdate','&&DT_FMT_REP'))
+),next_snap as(
+  select min(snap_id) snap_id 
+	from stats$snapshot 
+	where snap_id > (select min(snap_id) from stats$snapshot s where snap_time > to_date('&&bdate','&&DT_FMT_REP'))
+)
+select nvl2(prev_snap.snap_id,b.snap_id,next_snap.snap_id) as bsnap
+from b,prev_snap,next_snap;
+
 select max(snap_id) as esnap from stats$snapshot where snap_time < to_date('&&edate','&&DT_FMT_REP')+1;
 
 
@@ -61,6 +75,7 @@ prompt       google.charts.load('current', {'packages':['table', 'corechart', 'c
 prompt       google.charts.setOnLoadCallback(drawDBLoadChart);;  
 prompt       google.charts.setOnLoadCallback(drawOSLoadChart);; 
 prompt       google.charts.setOnLoadCallback(drawSGAChart);; 
+prompt       google.charts.setOnLoadCallback(drawIOMBSFuncChart);; 
 prompt       google.charts.setOnLoadCallback(drawInstActChart);;
 prompt       google.charts.setOnLoadCallback(drawWClassChart);;
 prompt       google.charts.setOnLoadCallback(drawWaitEvHistChart);;
@@ -76,6 +91,7 @@ prompt       var data = new google.visualization.DataTable();;
 prompt       data.addColumn('datetime', 'Snapshot');;
 prompt       data.addColumn('string', 'Process type');;
 prompt       data.addColumn('number', 'CPU Cores');;
+prompt       data.addColumn('number', 'CPU Threads');;
 prompt       data.addColumn('number', 'DB CPU (%)');;
 prompt       data.addColumn('number', 'DB Time (%)');;
 prompt       data.addColumn('number', 'Elapsed (min)');;
@@ -102,6 +118,7 @@ select snap_id,snap_time,chart_dt
   ,case when stat_name like 'background%' then 'Background' else 'Foreground' end fg_bg
   ,ela_sec
   ,ost.value as cpu_cores
+  ,ost2.value as cpu_threads
   ,case
     when lag(stm.value) over (partition by tms.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
     else round((stm.value-lag(stm.value) over (partition by tms.stat_name order by snap_id))/1000000,2)
@@ -109,17 +126,19 @@ select snap_id,snap_time,chart_dt
 from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
 join snap using(snap_id,dbid,instance_number)
 join stats$osstat ost using(snap_id,dbid,instance_number)
+join stats$osstat ost2 using(snap_id,dbid,instance_number)
 where stat_name in('DB time','DB CPU','background cpu time','background elapsed time')
   and ost.osstat_id = 16 /* NUM_CPU_CORES */
+  and ost2.osstat_id = 0 /* NUM_CPUS */
 ),
 group_stat as
 (
-select snap_time,chart_dt,ela_sec,cpu_cores,fg_bg,
+select snap_time,chart_dt,ela_sec,cpu_cores,cpu_threads,fg_bg,
 sum(case when stat_name in('DB CPU','background cpu time') then sec else 0 end) as DB_CPU, 
 sum(case when stat_name in('DB time','background elapsed time') then sec else 0 end) as DB_TIME
 from stat
 where ela_sec is not null 
-group by rollup(snap_time,chart_dt,ela_sec,cpu_cores,fg_bg) 
+group by rollup(snap_time,chart_dt,ela_sec,cpu_cores,cpu_threads,fg_bg) 
 order by snap_time,fg_bg
 ), chart_data as
 (
@@ -130,19 +149,25 @@ select
    ,chart_dt
   ,nvl(fg_bg,'Total') fg_bg
   ,cpu_cores   
+  ,cpu_threads   
   ,round(DB_CPU/ela_sec,4) db_cpu_pct
   ,round(DB_TIME/ela_sec,4) db_time_pct
   ,round(ela_sec/60,2) ela_min
   ,round(DB_CPU/60,2) db_cpu_min
   ,round(DB_TIME/60,2) db_time_min  
 from 
-group_stat where ela_sec is not null and cpu_cores is not null and chart_dt is not null
+group_stat 
+where ela_sec is not null 
+	and cpu_cores is not null 
+	and cpu_threads is not null 
+	and chart_dt is not null
 order by snap_time, nvl(fg_bg,'Total')
 )
 select 
   '[new Date('||chart_dt||'),'||
   ''''||fg_bg||''','||
   cpu_cores||','||
+  cpu_threads||','||
   '{v:'||round(db_cpu_pct,2)||', f:'''||db_cpu_pct*100||'%''}'||','||
   '{v:'||round(db_time_pct,2)||', f:'''||db_time_pct*100||'%''}'||','||
   ela_min||','||
@@ -184,14 +209,14 @@ prompt            	tooltip: {textStyle: {fontSize: 11}},
 prompt            	hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
 prompt            	vAxis: {title: 'Percent of elapsed time', textStyle: {fontSize: 10}, format: 'percent'}
 prompt				},
-prompt		  view: {columns: [0,2,3,4]}  
+prompt		  view: {columns: [0,2,3,4,5]}  
 prompt        });;	
 prompt
 prompt		var table = new google.visualization.ChartWrapper({
 prompt          chartType: 'Table',
 prompt          containerId: 'div_time_model_tab',
 prompt          options: {width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}},
-prompt		  view: {columns: [0,2,5,6,7,3,4]}  
+prompt		  view: {columns: [0,2,3,6,7,8,4,5]}  
 prompt        });;	
 prompt
 prompt        dashboard.bind([wclassCategory], [chart, table]);;
@@ -405,6 +430,157 @@ prompt	}
 ---------------------------------------------------
 
 ---------------------------------------------------
+-- I/O MB/s by func chart
+---------------------------------------------------
+prompt
+prompt     function drawIOMBSFuncChart() {
+prompt       var data = new google.visualization.DataTable();;
+prompt       data.addColumn('datetime', 'Snapshot');;
+prompt       data.addColumn('number', 'ARCH');;
+prompt       data.addColumn('number', 'Archive Manager');;
+prompt       data.addColumn('number', 'Buffer Cache Reads');;
+prompt       data.addColumn('number', 'DBWR');;
+prompt       data.addColumn('number', 'Data Pump');;
+prompt       data.addColumn('number', 'Direct Reads');;
+prompt       data.addColumn('number', 'Direct Writes');;
+prompt       data.addColumn('number', 'LGWR');;
+prompt       data.addColumn('number', 'Others');;
+prompt       data.addColumn('number', 'RMAN');;
+prompt       data.addColumn('number', 'Recovery');;
+prompt       data.addColumn('number', 'Smart Scan');;
+prompt       data.addColumn('number', 'Streams AQ');;
+prompt       data.addColumn('number', 'XDB');;
+prompt 
+prompt       data.addRows([
+
+with snap as
+(
+  select snap_id,dbid,instance_number
+    ,snap_time
+    ,row_number() over (order by snap_id desc) rn
+    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
+    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,startup_time,snapshot_exec_time_s
+  from stats$snapshot
+  where snap_id between &&bsnap and &esnap
+  and dbid = (select dbid from v$database)
+  and instance_number = (select instance_number from v$instance)
+),iostat as
+(
+select 
+  snap_id,dbid,instance_number,ela_sec,chart_dt,rn
+  ,function_name
+  --,small_read_megabytes, small_write_megabytes, large_read_megabytes, large_write_megabytes, small_read_reqs, small_write_reqs, large_read_reqs, large_write_reqs
+  ,case
+    when lag(small_read_megabytes) over (partition by function_id order by snap_id) > small_read_megabytes then small_read_megabytes
+    else small_read_megabytes-lag(small_read_megabytes) over (partition by function_id order by snap_id)
+   end small_read_megabytes
+  ,case
+    when lag(small_write_megabytes) over (partition by function_id order by snap_id) > small_write_megabytes then small_write_megabytes
+    else small_write_megabytes-lag(small_write_megabytes) over (partition by function_id order by snap_id)
+   end small_write_megabytes
+  ,case
+    when lag(large_read_megabytes) over (partition by function_id order by snap_id) > large_read_megabytes then large_read_megabytes
+    else large_read_megabytes-lag(large_read_megabytes) over (partition by function_id order by snap_id)
+   end large_read_megabytes
+  ,case
+    when lag(large_write_megabytes) over (partition by function_id order by snap_id) > large_write_megabytes then large_write_megabytes
+    else large_write_megabytes-lag(large_write_megabytes) over (partition by function_id order by snap_id)
+   end large_write_megabytes
+  ,case
+    when lag(small_read_reqs) over (partition by function_id order by snap_id) > small_read_reqs then small_read_reqs
+    else small_read_reqs-lag(small_read_reqs) over (partition by function_id order by snap_id)
+   end small_read_reqs
+  ,case
+    when lag(small_write_reqs) over (partition by function_id order by snap_id) > small_write_reqs then small_write_reqs
+    else small_write_reqs-lag(small_write_reqs) over (partition by function_id order by snap_id)
+   end small_write_reqs
+  ,case
+    when lag(large_read_reqs) over (partition by function_id order by snap_id) > large_read_reqs then large_read_reqs
+    else large_read_reqs-lag(large_read_reqs) over (partition by function_id order by snap_id)
+   end large_read_reqs
+  ,case
+    when lag(large_write_reqs) over (partition by function_id order by snap_id) > large_write_reqs then large_write_reqs
+    else large_write_reqs-lag(large_write_reqs) over (partition by function_id order by snap_id)
+   end large_write_reqs
+FROM stats$iostat_function if join stats$iostat_function_name ifn using(function_id)
+join snap using( snap_id,dbid,instance_number)
+order by snap_id,function_name
+), mbs_by_func as
+(
+select 
+    snap_id,dbid,instance_number,chart_dt ,rn
+    ,function_name  
+    ,round((small_read_megabytes+small_write_megabytes+large_read_megabytes+large_write_megabytes)/ela_sec,2) mbs
+    --,small_read_reqs+ small_write_reqs+ large_read_reqs+ large_write_reqs
+from iostat
+where small_read_megabytes is not null
+)
+select 
+--  chart_dt,arch, archive_manager, buf_cache_reads, dbwr, data_pump, direct_reads, direct_writes, lgwr, others, rman, recovery, smart_scan, streams_aq, xdb
+  '[new Date('||chart_dt||'),'||
+  arch||','|| 
+  archive_manager||','|| 
+  buf_cache_reads||','|| 
+  dbwr||','|| 
+  data_pump||','|| 
+  direct_reads||','|| 
+  direct_writes||','|| 
+  lgwr||','|| 
+  others||','|| 
+  rman||','|| 
+  recovery||','|| 
+  smart_scan||','|| 
+  streams_aq||','|| 
+  xdb||
+  ']'||case when rn=1 then '' else ',' end
+from mbs_by_func
+  pivot(
+    max(mbs) for function_name in
+      (
+        'ARCH' as arch,
+        'Archive Manager' as archive_manager,
+        'Buffer Cache Reads' as buf_cache_reads,
+        'DBWR' as dbwr,
+        'Data Pump' as data_pump,
+        'Direct Reads' as direct_reads,
+        'Direct Writes' as direct_writes,
+        'LGWR' as lgwr,
+        'Others' as others,
+        'RMAN' as rman,
+        'Recovery' as recovery,
+        'Smart Scan' as smart_scan,
+        'Streams AQ' as streams_aq,
+        'XDB' as xdb
+      )
+  )
+order by snap_id;
+
+prompt       ]);;
+prompt 
+prompt       var options = {
+prompt            isStacked: true,
+prompt            title: 'I/O MB/s by I/O function',
+prompt            backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
+prompt            explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
+prompt            titleTextStyle: {fontSize: 16, bold: true},
+prompt            focusTarget: 'category',
+prompt            legend: {position: 'right', textStyle: {fontSize: 12}},
+prompt            tooltip: {textStyle: {fontSize: 11}},
+prompt            hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
+prompt            vAxis: {title: 'MB/s', textStyle: {fontSize: 10} }
+prompt       };;
+prompt 
+prompt       var chart = new google.visualization.AreaChart(document.getElementById('div_iombs_func_chart'));;
+prompt       chart.draw(data, options);;
+prompt	}
+prompt
+
+---------------------------------------------------
+-- I/O MB/s by func chart
+---------------------------------------------------
+
+---------------------------------------------------
 -- Instance activity chart
 ---------------------------------------------------
 prompt     function drawInstActChart() {
@@ -416,6 +592,7 @@ prompt       data.addColumn('number', 'Avg/sec');;
 prompt       data.addColumn({type:'string',label:'Avg/sec formatted',role:'tooltip'});;
 prompt 
 prompt       data.addRows([
+
 with snap as
 (
   select snap_id,dbid,instance_number
@@ -460,6 +637,10 @@ where name in
     ,'parse count (total)'
     ,'parse count (hard)'
     ,'execute count'
+	,'bytes sent via SQL*Net to client'
+	,'bytes received via SQL*Net from client'
+	,'table scan blocks gotten'
+	,'table scan rows gotten'
   )
 order by snap_id,statistic#
 )
@@ -482,7 +663,7 @@ order by snap_id,stat_name;
 
 
 prompt       ]);;
-
+prompt
 prompt		var dashboard = new google.visualization.Dashboard(document.getElementById('div_inst_activ'));;
 prompt
 prompt        var filter = new google.visualization.ControlWrapper({
@@ -526,6 +707,7 @@ prompt        dashboard.bind([filter], [chart, table]);;
 prompt        dashboard.draw(data);;		
 prompt 
 prompt 	}
+prompt
 
 ---------------------------------------------------
 -- Instance activity chart end
@@ -669,6 +851,7 @@ prompt       chart.draw(data, options);;
 prompt       var table = new google.visualization.Table(document.getElementById('div_wait_class_tab'));;
 prompt       table.draw(data, {width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}});;
 prompt	}
+prompt
 
 ---------------------------------------------------
 -- Wait Class chart end
@@ -1007,15 +1190,15 @@ prompt       data.addColumn('number', 'SQL CPU % of DB CPU');;
 prompt       data.addColumn('number', 'DB CPU (total in snap)');;
 prompt       data.addColumn('number', 'CPU/exec');;
 prompt       data.addColumn('number', 'Elapsed (sec)');;
-prompt       data.addColumn('number', 'Ela% of DB Time');;
+prompt       data.addColumn('number', 'SQL ela % of DB time');;
 prompt       data.addColumn('number', 'DB Time (total in snap)');;
 prompt       data.addColumn('number', 'Ela/exec');;
 prompt       data.addColumn('number', 'User I/O (sec)');;
 prompt       data.addColumn('number', 'User I/O/exec');;
 prompt       data.addColumn('number', 'Application (sec)');;
-prompt       data.addColumn('number', 'Application/ exec');;
+prompt       data.addColumn('number', 'Appli./exec');;
 prompt       data.addColumn('number', 'Concurrency (sec)');;
-prompt       data.addColumn('number', 'Concurrency/ exec');;
+prompt       data.addColumn('number', 'Concur./exec');;
 prompt       data.addColumn('number', 'PLSQL (sec)');;
 prompt       data.addColumn('number', 'PLSQL/exec');;
 prompt       data.addColumn('number', 'Rows (total)');;
@@ -1149,7 +1332,8 @@ select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
   ,round(plsql/decode(execs,0,1,execs)/1000000,4) plsql_sec_exec
   ,rows_p as rows_total
   ,round(rows_p/decode(execs,0,1,execs),2) rows_exec
-  ,row_number() over (partition by snap_id order by ela desc) top_n
+  ,row_number() over (partition by snap_id order by ela desc) top_n_ela
+  ,row_number() over (partition by snap_id order by cpu desc) top_n_cpu
   --,row_number() over (order by snap_id,ela desc) rn
 from sdiff
 where execs is not null
@@ -1180,7 +1364,7 @@ select
   ,max(db_cpu) db_cpu
   ,max(db_time) db_time
 from sdiff2 join stat_cpu using(snap_id,dbid,instance_number)
-where top_n <= &&nTopSqls
+where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
 group by rollup(chart_dt,snap_id,sql_id)
 having grouping_id(chart_dt,snap_id,sql_id) <=1
 order by snap_id,9
@@ -1221,7 +1405,7 @@ prompt       ]);;
 prompt
 prompt		var chartView = new google.visualization.DataView(data);;
 prompt		chartView.setRows(chartView.getFilteredRows([{column: 1, value: 'Snap Total:'}]));;
-prompt		chartView.setColumns([0, 5, 9]);;
+prompt		chartView.setColumns([0, 5, 9, 15, 17]);;
 prompt
 prompt       var chart = new google.visualization.ChartWrapper({
 prompt          chartType: 'ColumnChart',
@@ -1229,7 +1413,7 @@ prompt          containerId: 'div_top_sqls_chart',
 prompt			dataTable: chartView,
 prompt          options: {
 prompt				isStacked:true,
-prompt				title: 'Top &&nTopSqls SQLs by elapsed time',
+prompt				title: 'Top &&nTopSqls SQLs by elapsed/CPU time',
 prompt				backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
 prompt				explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
 prompt				titleTextStyle: {fontSize: 16, bold: true},
@@ -1237,7 +1421,7 @@ prompt				focusTarget: 'category',
 prompt				legend: {position: 'right', textStyle: {fontSize: 12}},
 prompt				tooltip: {textStyle: {fontSize: 11}},
 prompt				hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
-prompt				vAxis: {title: 'Top &&nTopSqls SQLs elapsed time (sec)', textStyle: {fontSize: 10}}
+prompt				vAxis: {title: 'Top &&nTopSqls SQLs elapsed/CPU time (sec)', textStyle: {fontSize: 10}}
 prompt				}
 prompt        });;	
 prompt		chart.draw();;
@@ -1266,16 +1450,41 @@ prompt            filterColumnLabel: 'sql_id'
 prompt          }
 prompt      });;
 prompt 
+prompt		var snap_filter = new google.visualization.ControlWrapper({
+prompt			controlType: 'StringFilter',
+prompt			containerId: 'div_top_sqls_snap_filter',
+prompt			options: {
+prompt				filterColumnLabel: 'Snapshot',
+prompt				matchType: 'any',
+prompt				useFormattedValue: true
+prompt			}
+prompt		});;
 prompt 
 prompt		var table = new google.visualization.ChartWrapper({
 prompt          chartType: 'Table',
 prompt          containerId: 'div_top_sqls_tab',
 prompt          options: {allowHtml: true, width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}},
-prompt		  view: {columns: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]}  
+prompt		  view: {columns: [0,1,2,3,4,5,6,8,9,10,12,13,14,15,16,17,18,19,20,21,22]}  
 prompt        });	
 prompt
-prompt      dashboard.bind([filter,sqlid_filter], [table]);;
-prompt      dashboard.draw(data);;		
+prompt      dashboard.bind([sqlid_filter,snap_filter], [table]);;
+prompt      dashboard.draw(data);;	
+prompt
+prompt      google.visualization.events.addListener(chart, 'select', selectBarSnapHandler);;
+prompt      
+prompt      function selectBarSnapHandler() {
+prompt        var selection = chart.getChart().getSelection();;
+prompt        var selDate = chartView.getFormattedValue(selection[0].row, 0);;
+prompt        snap_filter.setState({'value': selDate});;
+prompt        snap_filter.draw();;
+prompt      }
+prompt      
+prompt      resetFilters = function() {
+prompt        snap_filter.setState({'value': null});;
+prompt        sqlid_filter.setState({'value': null});;
+prompt        snap_filter.draw();;
+prompt        sqlid_filter.draw();;
+prompt      }	
 prompt 
 prompt 	}
 ---------------------------------------------------
@@ -1302,6 +1511,10 @@ prompt   h3 {font-size:10pt; font-weight:bold; text-decoration:underline; color:
 prompt   pre {font:8pt monospace;Monaco,"Courier New",Courier;}
 prompt   font.footnote {font-size:8pt; font-style:italic; color:#555;}
 prompt   li.footnote {font-size:8pt; font-style:italic; color:#555;}
+prompt   a.toc:link, a.toc:visited {font-size:10pt; font-weight:bold; text-decoration:none; color:#333366;}
+prompt   a.toc:hover {font-size:10pt; font-weight:bold; text-decoration:underline; color:#333366; background-color:#eeeef6}
+prompt   a.fnnav:link, a.fnnav:visited {font-size:8pt; font-weight:bold; text-decoration:none; color:#333366;font-style:italic;}
+prompt   a.fnnav:hover {font-size:8pt; font-weight:bold; text-decoration:underline; color:#333366; background-color:#eeeef6;font-style:italic;}
 prompt   .google-visualization-table-table *  { font-size:8pt; }
 prompt </style>
 prompt </head>
@@ -1333,66 +1546,112 @@ select 'End snap:' as " ",snap_id,to_char(snap_time,'YYYY-MM-DD HH24:MI') snap_t
 from stats$snapshot join stats$sysstat ss using(snap_id,dbid,instance_number)
 where snap_id=&&esnap and ss.name='logons current';
 
-
 set pagesize 0
 set markup html off
-prompt <h2> Time model system stats </h2>
+
+prompt <h2 id="h_toc"> Reports list </h2>
+prompt <ul>
+prompt  <li><a class="toc" href="#h_time_model_stats">Time model system statistics</a></li> 
+prompt  <li><a class="toc" href="#h_os_load">OS Load</a></li> 
+prompt  <li><a class="toc" href="#h_sga_stat">SGA pool sizes</a></li> 
+prompt  <li><a class="toc" href="#h_iombs_func">I/O MB/s by I/O function</a></li> 
+prompt  <li><a class="toc" href="#h_instance_activity">Instance activity</a></li> 
+prompt  <li><a class="toc" href="#h_wait_class_time">Time waited (by wait class)</a></li> 
+prompt  <li><a class="toc" href="#h_wait_class_hist">Wait class histograms</a></li> 
+prompt  <li><a class="toc" href="#h_io_wait_ev_hist">IO wait events histograms</a></li> 
+prompt  <li><a class="toc" href="#h_top_n_sqls">Top &&nTopSqls SQLS by elapsed time and CPU time</a></li> 
+prompt  <li><a class="toc" href="#h_sql_text">List of SQL texts</a></li> 
+prompt </ul>
+
+
+prompt <h2 id="h_time_model_stats"> Time model system stats </h2>
 prompt <div id="div_time_model">
 prompt 	<div id="div_time_model_filter" style='width:1200px;padding:10px'></div>
 prompt 	<div id="div_time_model_chart" style='width:1200px; height: 400px'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
 prompt 	<div id="div_time_model_tab" style='width:1200px; height: 150px'></div>	
 prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
-prompt <h2> OS load </h2>
+prompt <h2 id="h_os_load"> OS load </h2>
 prompt <div id="div_os_load_chart" style='width:1200px; height: 400px'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
 prompt <div id="div_os_load_tab" style='width:1200px; height: 150px'></div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
-prompt <h2> SGA stat </h2>
+prompt <h2 id="h_sga_stat"> SGA stat </h2>
 prompt <div id="div_sga_chart" style='width:1200px; height: 400px'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
 prompt <div id="div_sga_tab" style='width:1200px; height: 150px'></div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
-prompt <h2> Instance activity (load profile) </h2>
+prompt <h2 id="h_iombs_func"> I/O MB/s by I/O function  </h2>
+prompt <div id="div_iombs_func_chart" style='width:1200px; height: 450px'></div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
+
+
+prompt <h2 id="h_instance_activity"> Instance activity (load profile) </h2>
 prompt <div id="div_inst_activ">
 prompt 	<div id="div_inst_activ_filter" style='width:1200px;padding:10px'></div>
 prompt 	<div id="div_inst_activ_chart" style='width:1200px; height: 450px'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
 prompt 	<div id="div_inst_activ_tab" style='width:1200px; height: 150px'></div>	
 prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 
-prompt <h2> Time by wait class </h2>
+prompt <h2 id="h_wait_class_time"> Time by wait class </h2>
 prompt <div id="div_wait_class_chart" style='width:1200px; height: 500px'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in seconds):</font>
 prompt <div id="div_wait_class_tab" style='width:1200px; height: 150px'></div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
-prompt <h2> Wait class histograms (percent of total waits) </h2>
+prompt <h2 id="h_wait_class_hist"> Wait class histograms (percent of total waits) </h2>
 prompt <div id="div_wclass_hist">
 prompt 	<div id="div_wclass_hist_filter" style='width:1200px;padding:10px'></div>
 prompt 	<div id="div_wclass_hist_chart" style='width:1200px; height: 500px'></div>
 prompt 	<div id="div_wclass_hist_tab" style='width:1200px; height: 150px'></div>	
 prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
-prompt <h2> Wait events (I/O related) histograms (percent of total waits) </h2>
+prompt <h2 id="h_io_wait_ev_hist"> Wait events (I/O related) histograms (percent of total waits) </h2>
 prompt <div id="div_event_hist">
 prompt 	<div id="div_event_hist_filter" style='width:1200px;padding:10px'></div>
 prompt 	<div id="div_event_hist_chart" style='width:1200px; height: 500px'></div>
 prompt 	<div id="div_event_hist_tab" style='width:1200px; height: 150px'></div>	
 prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 
-prompt <h2> Top &&nTopSqls sqls by elapsed time </h2>
+prompt <h2 id="h_top_n_sqls"> Top &&nTopSqls sqls by elapsed/CPU time </h2>
+prompt <ul>
+prompt <li class="footnote">Filtered &&nTopSqls by CPU time and &&nTopSqls by elapsed time </li>
+prompt </ul>
 prompt <div id="div_top_sqls_chart" style='width:1200px; height: 500px'></div>
 prompt <div id="div_top_sqls">
-prompt 	<div id="div_top_sqls_range" style='width:1200px;padding-top:15px;'></div>
-prompt 	<div id="div_top_sqls_filter" style='width:1200px;padding-top:10px;padding-bottom:10px;'></div>
-prompt 	<div id="div_top_sqls_tab" style='width:95%; height: 350px'></div>	
+prompt <ul>
+prompt <li class="footnote">Graph note: drag to zoom, right click to reset</li>
+prompt <li class="footnote">Left click on bar to filter table by snapshot</li>
+prompt <li class="footnote">sql_id filters by prefix, enter "Snap total" as sql_id to filter records with snap aggregated values</li>
+prompt </ul>
+prompt <div id="div_top_sqls_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left;'></div>
+prompt <div id="div_top_sqls_snap_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left'></div>
+prompt <div id="reset_filters" style='width:250px;padding-top:10px;padding-bottom:10px;float:left'>
+prompt 	<button style='width:150px;padding: 0px 5px;border-radius: 4px;' onclick="resetFilters();"> Clear filters</button>
+prompt <script type="text/javascript">
+prompt 		function resetFilters() {
+prompt 		  snap_filter.setState({'value': null});
+prompt 		  sqlid_filter.setState({'value': null});
+prompt 		  snap_filter.draw();
+prompt 		  sqlid_filter.draw();
+prompt 		}
+prompt     </script>
 prompt </div>
+prompt <div id="div_top_sqls_tab" style='width:95%; height:150px;clear:left;'></div>
+prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
 
-
-prompt <h2> List of SQL Text </h2>
+prompt <h2 id="h_sql_text"> List of SQL Text </h2>
 prompt <ul>
 prompt	<li>SQL text truncated to first 4000 characters</li>
 prompt </ul>
@@ -1470,7 +1729,8 @@ select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
   ,round(cpu/decode(execs,0,1,execs)/1000000,4) cpu_sec_exec
   ,round(ela/1000000,2) ela_sec
   ,round(ela/decode(execs,0,1,execs)/1000000,4) ela_sec_exec
-  ,row_number() over (partition by snap_id order by ela desc) top_n
+  ,row_number() over (partition by snap_id order by ela desc) top_n_ela
+  ,row_number() over (partition by snap_id order by cpu desc) top_n_cpu
 from sdiff
 where execs is not null
 ),sql_ids
@@ -1478,7 +1738,7 @@ as(
 select
   distinct sql_id
 from sdiff2 
-where top_n <= &&nTopSqls
+where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
 )
 select 
 	'<div id="'||sql_id||'">'||sql_id||'</div>' sql_id
@@ -1489,6 +1749,9 @@ group by sql_id
 order by sql_id;
 set markup html off
 
+prompt <a class="fnnav" href="#h_toc">back to top</a>
+prompt 
+prompt <hr>
 prompt </body>
 prompt </html>
 prompt 
