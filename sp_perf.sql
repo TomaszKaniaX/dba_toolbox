@@ -1,8 +1,9 @@
-/*	
-	Script for statspack snapshots analysis
-	Run as statspack repository owner, typically "perfstat" user
-	Author: Tomasz Kania
-	Ver: 0.01 beta
+/*
+ * Script for statspack snapshots analysis
+ * Run as statspack repository owner, typically "perfstat" user
+ * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql
+ * Author: Tomasz Kania
+ * Ver: 0.01 beta
 */
 
 set linesize 2000 pagesize 0 long 2000000 longchunksize 100000 
@@ -45,6 +46,9 @@ def MAINREPORTFILE=sp_rep_&&bdate._&&edate._&&inst_n..html
 spool &&MAINREPORTFILE
 
 prompt <html>
+prompt <!-- Statspack reports/graphs -->
+prompt <!-- https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql -->
+prompt <!-- Author: tkania.dba@gmail.com -->
 prompt <head>
 prompt   <title>&&REPTITLE.</title>
 
@@ -98,7 +102,10 @@ select snap_id,snap_time,chart_dt
   ,case when stat_name like 'background%' then 'Background' else 'Foreground' end fg_bg
   ,ela_sec
   ,ost.value as cpu_cores
-  ,round((stm.value-lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id))/1000000,2) sec
+  ,case
+    when lag(stm.value) over (partition by tms.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
+    else round((stm.value-lag(stm.value) over (partition by tms.stat_name order by snap_id))/1000000,2)
+   end sec  
 from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
 join snap using(snap_id,dbid,instance_number)
 join stats$osstat ost using(snap_id,dbid,instance_number)
