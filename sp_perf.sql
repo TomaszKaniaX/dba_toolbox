@@ -1630,12 +1630,12 @@ prompt <h2 id="h_toc"> Reports list </h2>
 prompt <ul>
 prompt  <li><a class="toc" href="#h_time_model_stats">Time model system statistics</a></li> 
 prompt  <li><a class="toc" href="#h_os_load">OS Load</a></li> 
-prompt  <li><a class="toc" href="#h_sga_stat">SGA pool sizes</a></li> 
-prompt  <li><a class="toc" href="#h_iombs_func">I/O MB/s by I/O function</a></li> 
 prompt  <li><a class="toc" href="#h_instance_activity">Instance activity</a></li> 
 prompt  <li><a class="toc" href="#h_wait_class_time">Time waited (by wait class)</a></li> 
 prompt  <li><a class="toc" href="#h_wait_class_hist">Wait class histograms</a></li> 
 prompt  <li><a class="toc" href="#h_io_wait_ev_hist">IO wait events histograms</a></li> 
+prompt  <li><a class="toc" href="#h_sga_stat">SGA pool sizes</a></li> 
+prompt  <li><a class="toc" href="#h_iombs_func">I/O MB/s by I/O function</a></li> 
 prompt  <li><a class="toc" href="#h_top_n_sqls">Top &&nTopSqls SQLS by elapsed time and CPU time</a></li> 
 prompt  <li><a class="toc" href="#h_sql_text">List of SQL texts</a></li> 
 prompt </ul>
@@ -1655,17 +1655,6 @@ prompt <div id="div_os_load_chart" style='width:1200px; height: 400px'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
 prompt <div id="div_os_load_tab" style='width:1200px; height: 150px'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
-
-prompt <h2 id="h_sga_stat"> SGA stat </h2>
-prompt <div id="div_sga_chart" style='width:1200px; height: 400px'></div>
-prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
-prompt <div id="div_sga_tab" style='width:1200px; height: 150px'></div>
-prompt <a class="fnnav" href="#h_toc">back to top</a>
-
-prompt <h2 id="h_iombs_func"> I/O MB/s by I/O function  </h2>
-prompt <div id="div_iombs_func_chart" style='width:1200px; height: 450px'></div>
-prompt <a class="fnnav" href="#h_toc">back to top</a>
-
 
 prompt <h2 id="h_instance_activity"> Instance activity (load profile) </h2>
 prompt <div id="div_inst_activ">
@@ -1697,6 +1686,16 @@ prompt 	<div id="div_event_hist_filter" style='width:1200px;padding:10px'></div>
 prompt 	<div id="div_event_hist_chart" style='width:1200px; height: 500px'></div>
 prompt 	<div id="div_event_hist_tab" style='width:1200px; height: 150px'></div>	
 prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
+
+prompt <h2 id="h_sga_stat"> SGA stat </h2>
+prompt <div id="div_sga_chart" style='width:1200px; height: 400px'></div>
+prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
+prompt <div id="div_sga_tab" style='width:1200px; height: 150px'></div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
+
+prompt <h2 id="h_iombs_func"> I/O MB/s by I/O function  </h2>
+prompt <div id="div_iombs_func_chart" style='width:1200px; height: 450px'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 
