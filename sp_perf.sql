@@ -11,6 +11,7 @@ set termout off
 set trimspool on echo off feedback off 
 set verify off
 set define '&'
+set serveroutput on size unlimited
 
 --defines 
 col global_name new_val db_n noprint
@@ -21,39 +22,106 @@ select instance_name from v$instance;
 col bsnap new_val bsnap noprint
 col esnap new_val esnap noprint
 
+var bsnap number
+var esnap number
+
 col bdate new_val bdate noprint
 col edate new_val edate noprint
 def DT_FMT_REP="Mon-DD"
-select to_char(trunc(sysdate)-7,'&&DT_FMT_REP') as bdate, to_char(trunc(sysdate),'&&DT_FMT_REP') as edate from dual;
+def DT_FMT_ISO="YYYY-MM-DD HH24:MI"
+var bdate varchar2(20)
+var edate varchar2(20)
 
+select 
+  to_char(greatest(trunc(sysdate)-7,min(snap_time)),'&&DT_FMT_REP') as bdate, 
+  to_char(least(trunc(sysdate),max(snap_time)),'&&DT_FMT_REP') as edate 
+from stats$snapshot;
+
+whenever sqlerror exit
 
 set termout on
+
+declare 
+  v_nSnaps number;
+  v_OldestSnap date;
+  v_NewestSnap date;
+  v_date1 date;
+  v_date2 date;
+begin
+  select count(*),min(snap_time), max(snap_time) into v_nSnaps,v_OldestSnap,v_NewestSnap from stats$snapshot;  
+  if v_nSnaps < 8 then
+    raise_application_error(-20001,'Insufficient data in statspack repository. '||to_char(v_nSnaps)||' snapshosts available, at least 8 snapsthots are required');
+  else
+    select 
+      greatest(trunc(sysdate)-7,min(snap_time)),
+      least(trunc(sysdate),max(snap_time))
+      into v_date1,v_date2  
+    from stats$snapshot;
+    :bdate := to_char(v_date1,'&&DT_FMT_ISO');
+    :edate := to_char(v_date2,'&&DT_FMT_ISO');
+   
+    dbms_output.put_line('==================================================================');
+    dbms_output.put_line('Snapshots available: '||to_char(v_nSnaps));
+    dbms_output.put_line('Oldest snapshot: '||to_char(v_OldestSnap,'&&DT_FMT_REP HH24:MI'));
+    dbms_output.put_line('Latest snapshot: '||to_char(v_NewestSnap,'&&DT_FMT_REP HH24:MI'));
+    dbms_output.put_line('==================================================================');
+  end if;
+end;
+/
+
+
 prompt ==================================================================
-ACCEPT bdate  DEFAULT '&bdate'  PROMPT 'Enter start date [&bdate]: '
-ACCEPT edate  DEFAULT '&edate'  PROMPT 'Enter end date [&edate]: '
-ACCEPT nTopSqls DEFAULT '5'     PROMPT 'Top SQLs per snapshot [5]: '
+ACCEPT bdate  DEFAULT '&bdate'  PROMPT 'Enter start date as &&DT_FMT_REP [&bdate]: '
+ACCEPT edate  DEFAULT '&edate'  PROMPT 'Enter end date as &&DT_FMT_REP [&edate]: '
+ACCEPT nTopSqls DEFAULT '5'     PROMPT 'Enter number of top SQLs per snapshot [5]: '
 prompt ==================================================================
+
+
+declare
+  v_bsnap number;
+  v_esnap number;
+  v_nSnaps number;
+begin
+  select min(snap_id) into v_bsnap 
+  from
+  (
+    select snap_id,lag(snap_id) over(order by snap_time) prev_snap,lead(snap_id) over(order by snap_time) next_snap,snap_time from stats$snapshot
+  ) 
+  where 
+    snap_time >= to_date('&&bdate','&&DT_FMT_REP')
+    and prev_snap is not null 
+    and next_snap is not null;
+
+  select max(snap_id) into v_esnap 
+  from
+  (
+    select snap_id,lag(snap_id) over(order by snap_time) prev_snap,lead(snap_id) over(order by snap_time) next_snap,snap_time from stats$snapshot
+  ) 
+  where 
+    snap_time < to_date('&&edate','&&DT_FMT_REP')+1
+    and snap_id > v_bsnap;
+
+  select count(*) into v_nSnaps
+  from stats$snapshot
+  where snap_id between v_bsnap and v_esnap;
+  
+  if v_nSnaps < 7 then
+    Dbms_Output.Put_Line('bsnap:'||v_bsnap);
+    Dbms_Output.Put_Line('esnap:'||v_esnap);
+    raise_application_error(-20002,'Insufficient statspack data in selected range. '||to_char(v_nSnaps)||' snapshosts available, at least 7 usable snapsthots are required');
+  else
+    :bsnap := v_bsnap;
+    :esnap := v_esnap; 
+    dbms_output.put_line('Found '||to_char(v_nSnaps)||' snapshots');
+  end if;
+
+end;
+/
+
+
+prompt Generating report, it may take a while.... Please wait...
 set termout off
 
-with b as ( 
-  select min(snap_id) snap_id from stats$snapshot s where snap_time > to_date('&&bdate','&&DT_FMT_REP')
-), 
-prev_snap as(
-  select max(snap_id) snap_id 
-	from stats$snapshot 
-	where snap_id < (select min(snap_id) from stats$snapshot s where snap_time > to_date('&&bdate','&&DT_FMT_REP'))
-),next_snap as(
-  select min(snap_id) snap_id 
-	from stats$snapshot 
-	where snap_id > (select min(snap_id) from stats$snapshot s where snap_time > to_date('&&bdate','&&DT_FMT_REP'))
-)
-select nvl2(prev_snap.snap_id,b.snap_id,next_snap.snap_id) as bsnap
-from b,prev_snap,next_snap;
-
-select max(snap_id) as esnap from stats$snapshot where snap_time < to_date('&&edate','&&DT_FMT_REP')+1;
-
-
-def DT_FMT_ISO="YYYY-MM-DD HH24:MI"
 def REPTITLE="Statspack report for &&db_n"
 
 def MAINREPORTFILE=sp_rep_&&bdate._&&edate._&&inst_n..html
@@ -108,7 +176,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
 ),
 stat as
 (
@@ -252,7 +320,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),stat as
@@ -366,7 +434,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),sga_stat as
@@ -462,7 +530,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),iostat as
@@ -602,7 +670,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ), stat as
@@ -744,7 +812,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),
@@ -890,7 +958,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),
@@ -1054,7 +1122,7 @@ with snap as
     ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),
@@ -1215,7 +1283,7 @@ with snap as
     ,startup_time,snapshot_exec_time_s
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),
@@ -1533,18 +1601,18 @@ set markup html on head "" TABLE "class='sql' style='width:300px;'"
 select 'CPU sockets:' as host_property, cpu_socket_count_current as value from v$license union
 select 'CPU cores:' as property, cpu_core_count_current as value from v$license union
 select 'CPU threads:' as property, cpu_count_current as value from v$license union
-select 'Physical mem (GB):',value/1024/1024/1024 From v$osstat where osstat_id=1008
+select 'Physical mem (GB):',round(value/1024/1024/1024) From v$osstat where osstat_id=1008
 ;
 
 
 set markup html on head "" TABLE "class='sql' style='width:600px;'"
 select 'Begin snap:' as " ",snap_id,to_char(snap_time,'YYYY-MM-DD HH24:MI') snap_time,to_char((snap_time-startup_time) day(3) to second(0),'DDD HH24:MI:SS') uptime,value as sessions
 from stats$snapshot join stats$sysstat ss using(snap_id,dbid,instance_number)
-where snap_id=&&bsnap and ss.name='logons current'
+where snap_id=:bsnap and ss.name='logons current'
 union all
 select 'End snap:' as " ",snap_id,to_char(snap_time,'YYYY-MM-DD HH24:MI') snap_time,to_char((snap_time-startup_time) day(3) to second(0),'DDD HH24:MI:SS') uptime,value 
 from stats$snapshot join stats$sysstat ss using(snap_id,dbid,instance_number)
-where snap_id=&&esnap and ss.name='logons current';
+where snap_id=:esnap and ss.name='logons current';
 
 set pagesize 0
 set markup html off
@@ -1669,7 +1737,7 @@ with snap as
     ,startup_time,snapshot_exec_time_s
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from stats$snapshot
-  where snap_id between &&bsnap and &&esnap
+  where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
   and instance_number = (select instance_number from v$instance)
 ),
