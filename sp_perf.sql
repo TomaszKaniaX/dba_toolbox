@@ -33,7 +33,7 @@ var bdate varchar2(20)
 var edate varchar2(20)
 
 select 
-  to_char(greatest(trunc(sysdate)-7,min(snap_time)),'&&DT_FMT_REP') as bdate, 
+  to_char(greatest(trunc(sysdate)-3,min(snap_time)),'&&DT_FMT_REP') as bdate, 
   to_char(least(trunc(sysdate),max(snap_time)),'&&DT_FMT_REP') as edate 
 from stats$snapshot;
 
@@ -53,7 +53,7 @@ begin
     raise_application_error(-20001,'Insufficient data in statspack repository. '||to_char(v_nSnaps)||' snapshosts available, at least 8 snapsthots are required');
   else
     select 
-      greatest(trunc(sysdate)-7,min(snap_time)),
+      greatest(trunc(sysdate)-3,min(snap_time)),
       least(trunc(sysdate),max(snap_time))
       into v_date1,v_date2  
     from stats$snapshot;
@@ -112,14 +112,14 @@ begin
   else
     :bsnap := v_bsnap;
     :esnap := v_esnap; 
-    dbms_output.put_line('Found '||to_char(v_nSnaps)||' snapshots');
+    dbms_output.put_line('Analyzing '||to_char(v_nSnaps)||' snapshots');
   end if;
 
 end;
 /
 
 
-prompt Generating report, it may take a while.... Please wait...
+prompt Generating report, it may take few minutes.... Please wait...
 set termout off
 
 def REPTITLE="Statspack report for &&db_n"
@@ -1250,6 +1250,7 @@ prompt     function drawTopSQLChart() {
 prompt       var data = new google.visualization.DataTable();;
 prompt       data.addColumn('datetime', 'Snapshot');;
 prompt       data.addColumn({type:'string',label:'sql_id'});;
+prompt       data.addColumn({type:'string',label:'module'});;
 prompt       data.addColumn('number', 'Executions');;
 prompt       data.addColumn('number', 'Buffer gets');;
 prompt       data.addColumn('number', 'Buf gets/exec');;
@@ -1311,6 +1312,7 @@ sqls as
 (
   select snap_id,dbid,instance_number
     ,s.sql_id
+    ,s.module
     ,s.old_hash_value
     ,nvl(s.executions,0) execs
     ,nvl(s.buffer_gets,0) gets
@@ -1330,7 +1332,7 @@ sdiff as
 (
 select
   snap_id,dbid,instance_number,ela_snap_sec,chart_dt
-  ,sql_id,old_hash_value
+  ,sql_id,module,old_hash_value
   ,case
     when execs < lag(execs) over(partition by sql_id order by snap_id) and restart = 0 then 0
     when execs < lag(execs) over(partition by sql_id order by snap_id) and restart = 1 then execs
@@ -1381,7 +1383,7 @@ from sqls
 , sdiff2 as
 (
 select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
-  ,sql_id, old_hash_value
+  ,sql_id, module, old_hash_value
   ,execs
   ,gets
   ,round(gets/decode(execs,0,1,execs),2) gets_exec
@@ -1412,6 +1414,11 @@ select
   chart_dt
   ,snap_id
   ,nvl(sql_id,'Snap Total:') sql_id
+  ,nvl(module,'[null]') module
+   ,grouping(chart_dt)
+   ,grouping(snap_id)
+   ,grouping(sql_id)
+   ,grouping(module)
   ,sum(execs) execs
   ,sum(gets) gets
   ,sum(gets_exec) gets_exec
@@ -1433,14 +1440,16 @@ select
   ,max(db_time) db_time
 from sdiff2 join stat_cpu using(snap_id,dbid,instance_number)
 where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
-group by rollup(chart_dt,snap_id,sql_id)
-having grouping_id(chart_dt,snap_id,sql_id) <=1
+group by rollup(chart_dt,snap_id,sql_id,module)
+having ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 0 and grouping(module) = 0 )
+  or ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 1 )
 order by snap_id,9
 )
 select
   decode(rownum,1,'',',')||
     '[new Date('||chart_dt||'),'||
-  ''''||sql_id||''','||
+  ''''||sql_id||''','||  
+  ''''||module||''','||  
   execs||','||
   gets||','||
   decode(sql_id,'Snap Total:',0,gets_exec)||','||
@@ -1473,7 +1482,7 @@ prompt       ]);;
 prompt
 prompt		var chartView = new google.visualization.DataView(data);;
 prompt		chartView.setRows(chartView.getFilteredRows([{column: 1, value: 'Snap Total:'}]));;
-prompt		chartView.setColumns([0, 5, 9, 15, 17]);;
+prompt		chartView.setColumns([0, 6, 10, 16, 18]);;
 prompt
 prompt       var chart = new google.visualization.ChartWrapper({
 prompt          chartType: 'ColumnChart',
@@ -1494,7 +1503,7 @@ prompt				}
 prompt        });;	
 prompt		chart.draw();;
 prompt
-prompt		var dashboard = new google.visualization.Dashboard(document.getElementById('div_top_sqls'));
+prompt		var dashboard = new google.visualization.Dashboard(document.getElementById('div_top_sqls'));;
 prompt
 prompt      var filter = new google.visualization.ControlWrapper({
 prompt          controlType: 'DateRangeFilter',
@@ -1507,8 +1516,8 @@ prompt			  }
 prompt          }
 prompt      });;
 prompt
-prompt      var formatter = new google.visualization.PatternFormat('<a href="#{0}">{0}</a>');
-prompt      formatter.format(data, [1]);
+prompt      var formatter = new google.visualization.PatternFormat('<a href="#{0}">{0}</a>');;
+prompt      formatter.format(data, [1]);;
 prompt
 prompt      var sqlid_filter = new google.visualization.ControlWrapper({
 prompt          controlType: 'StringFilter',
@@ -1532,8 +1541,8 @@ prompt		var table = new google.visualization.ChartWrapper({
 prompt          chartType: 'Table',
 prompt          containerId: 'div_top_sqls_tab',
 prompt          options: {allowHtml: true, width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}},
-prompt		  view: {columns: [0,1,2,3,4,5,6,8,9,10,12,13,14,15,16,17,18,19,20,21,22]}  
-prompt        });	
+prompt		  view: {columns: [0,1,2,3,4,5,6,8,9,10,12,13,14,15,16,17,18,19,20,21,22,23]}  
+prompt        });;	
 prompt
 prompt      dashboard.bind([sqlid_filter,snap_filter], [table]);;
 prompt      dashboard.draw(data);;	
@@ -1693,13 +1702,13 @@ prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_top_n_sqls"> Top &&nTopSqls sqls by elapsed/CPU time </h2>
 prompt <ul>
-prompt <li class="footnote">Filtered &&nTopSqls by CPU time and &&nTopSqls by elapsed time </li>
+prompt <li class="footnote">Filtered &&nTopSqls top sqls by CPU time and &&nTopSqls top sqls by elapsed time </li>
 prompt </ul>
 prompt <div id="div_top_sqls_chart" style='width:1200px; height: 500px'></div>
 prompt <div id="div_top_sqls">
 prompt <ul>
 prompt <li class="footnote">Graph note: drag to zoom, right click to reset</li>
-prompt <li class="footnote">Left click on bar to filter table by snapshot</li>
+prompt <li class="footnote">Left click on a bar to filter the table by snapshot</li>
 prompt <li class="footnote">sql_id filters by prefix, enter "Snap total" as sql_id to filter records with snap aggregated values</li>
 prompt </ul>
 prompt <div id="div_top_sqls_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left;'></div>
@@ -1715,7 +1724,7 @@ prompt 		  sqlid_filter.draw();
 prompt 		}
 prompt     </script>
 prompt </div>
-prompt <div id="div_top_sqls_tab" style='width:95%; height:150px;clear:left;'></div>
+prompt <div id="div_top_sqls_tab" style='width:100%; height:150px;clear:left;'></div>
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
@@ -1725,7 +1734,7 @@ prompt	<li>SQL text truncated to first 4000 characters</li>
 prompt </ul>
 
 set pagesize 40000
-set markup html on head "" TABLE "class='sql' style='width:95%;'"
+set markup html on head "" TABLE "class='sql' style='width:100%;'"
 col sql_id entmap off
 with snap as
 (
