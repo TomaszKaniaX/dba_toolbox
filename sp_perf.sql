@@ -6,7 +6,7 @@
  * Ver: 0.01 beta
 */
 
-set linesize 2000 pagesize 0 long 2000000 longchunksize 100000 
+set linesize 2000 pagesize 0 long 2000000
 set termout off
 set trimspool on echo off feedback off 
 set verify off
@@ -141,6 +141,7 @@ prompt   <script type="text/javascript" src="https://www.gstatic.com/charts/load
 prompt     <script type="text/javascript">
 prompt       google.charts.load('current', {'packages':['table', 'corechart', 'controls']});;
 prompt       google.charts.setOnLoadCallback(drawDBLoadChart);;  
+prompt       google.charts.setOnLoadCallback(drawTimeModelChart);;  
 prompt       google.charts.setOnLoadCallback(drawOSLoadChart);; 
 prompt       google.charts.setOnLoadCallback(drawSGAChart);; 
 prompt       google.charts.setOnLoadCallback(drawIOMBSFuncChart);; 
@@ -291,9 +292,130 @@ prompt        dashboard.bind([wclassCategory], [chart, table]);;
 prompt        dashboard.draw(data);;	
 prompt 
 prompt 	}
+prompt
 
 ---------------------------------------------------
 -- DB Load chart end
+---------------------------------------------------
+
+
+---------------------------------------------------
+-- Time model details chart
+---------------------------------------------------
+prompt     function drawTimeModelChart() {
+prompt       var data = new google.visualization.DataTable();;
+prompt       data.addColumn('datetime', 'Snapshot');;
+prompt       data.addColumn('number', 'DB CPU');;
+prompt       data.addColumn('number', 'sql execute elapsed time');;
+prompt       data.addColumn('number', 'PL/SQL execution elapsed time');;
+prompt       data.addColumn('number', 'PL/SQL compilation elapsed time');;
+prompt       data.addColumn('number', 'parse time elapsed');;
+prompt       data.addColumn('number', 'hard parse elapsed time');;
+prompt       data.addColumn('number', 'failed parse elapsed time');;
+prompt       data.addColumn('number', 'connection management call elapsed time');;
+prompt       data.addColumn('number', 'inbound PL/SQL rpc elapsed time');;
+prompt       data.addColumn('number', 'repeated bind elapsed time');;
+prompt       data.addColumn('number', 'Java execution elapsed time');;
+prompt       data.addColumn('number', 'sequence load elapsed time');;
+prompt 
+prompt       data.addRows([
+with snap as
+(
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
+    ,snap_time
+    ,row_number() over (order by snap_id desc) rn
+    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI') chart_dt
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
+    ,startup_time,snapshot_exec_time_s
+  from stats$snapshot
+  where snap_id between :bsnap and :esnap
+),
+stat as
+(
+select snap_id,dbid,instance_number
+  ,snap_time,chart_dt
+  ,rn
+  ,stat_name
+  ,ela_sec
+  ,case
+    when lag(stm.value) over (partition by tms.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
+    else round((stm.value-lag(stm.value) over (partition by tms.stat_name order by snap_id))/1000000,2)
+   end sec  
+from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+join snap using(snap_id,dbid,instance_number)
+),
+chart_data as
+(
+select snap_id, dbid, instance_number, chart_dt, rn, ela_sec, db_cpu, sql_exec, java_exec, plsql_exec, plsql_compil, parse_time, hard_parse, failed_parse, conn_mgmt, inbound_plsql_rpc, repeated_bind, seq_load 
+from stat
+  pivot(
+    max(sec) for stat_name in
+      (
+        'DB CPU' as db_cpu,
+        --'DB time',
+        'sql execute elapsed time' as sql_exec,
+        'PL/SQL execution elapsed time' as plsql_exec,
+        'PL/SQL compilation elapsed time' as plsql_compil,
+        'parse time elapsed' as parse_time,
+        'hard parse elapsed time' as hard_parse,
+        'failed parse elapsed time' as failed_parse,
+        'connection management call elapsed time' as conn_mgmt,
+        --'RMAN cpu time (backup/restore)',
+        --'background cpu time',
+        --'background elapsed time',
+        --'failed parse (out of shared memory) elapsed time',
+        --'hard parse (bind mismatch) elapsed time',
+        --'hard parse (sharing criteria) elapsed time',
+        'inbound PL/SQL rpc elapsed time' as inbound_plsql_rpc,
+        'repeated bind elapsed time' as repeated_bind,
+        'Java execution elapsed time' as java_exec,
+        'sequence load elapsed time' as seq_load
+      )
+  )
+where db_cpu is not null
+order by snap_id
+)
+select
+  '[new Date('||chart_dt||'),'||
+  db_cpu||','|| 
+  sql_exec||','|| 
+  plsql_exec||','|| 
+  plsql_compil||','|| 
+  parse_time||','||
+  hard_parse||','|| 
+  failed_parse||','|| 
+  conn_mgmt||','||
+  inbound_plsql_rpc||','||
+  repeated_bind||','||
+  java_exec||','|| 
+  seq_load||
+  ']'||case when rn=1 then '' else ',' end
+from chart_data
+order by snap_id;
+
+prompt       ]);;
+prompt 
+prompt       var options = {
+prompt            isStacked: true,
+prompt            title: 'Time model (DB Time breakdown)',
+prompt            backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
+prompt            explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
+prompt            titleTextStyle: {fontSize: 16, bold: true},
+prompt            focusTarget: 'category',
+prompt            legend: {position: 'right', textStyle: {fontSize: 12}},
+prompt            tooltip: {textStyle: {fontSize: 11}},
+prompt            hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
+prompt            vAxis: {title: 'Time (seconds)', textStyle: {fontSize: 10}}
+prompt       };;
+prompt 
+prompt     var chart = new google.visualization.AreaChart(document.getElementById('div_time_model_det_chart'));;
+prompt     chart.draw(data, options);;
+prompt     var table = new google.visualization.Table(document.getElementById('div_time_model_det_tab'));;
+prompt     table.draw(data, {width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}});;
+prompt	}
+prompt
+---------------------------------------------------
+-- Time model details chart end
 ---------------------------------------------------
 
 
@@ -402,11 +524,10 @@ prompt       chart.draw(chartView, options);;
 prompt       var table = new google.visualization.Table(document.getElementById('div_os_load_tab'));;
 prompt       table.draw(data, {width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}});;
 prompt	}
-
+prompt
 ---------------------------------------------------
 -- OS load chart end
 ---------------------------------------------------
-
 
 ---------------------------------------------------
 -- SGA chart
@@ -705,10 +826,10 @@ where name in
     ,'parse count (total)'
     ,'parse count (hard)'
     ,'execute count'
-	,'bytes sent via SQL*Net to client'
-	,'bytes received via SQL*Net from client'
-	,'table scan blocks gotten'
-	,'table scan rows gotten'
+    ,'bytes sent via SQL*Net to client'
+    ,'bytes received via SQL*Net from client'
+    ,'table scan blocks gotten'
+    ,'table scan rows gotten'
   )
 order by snap_id,statistic#
 )
@@ -1629,6 +1750,7 @@ set markup html off
 prompt <h2 id="h_toc"> Reports list </h2>
 prompt <ul>
 prompt  <li><a class="toc" href="#h_time_model_stats">Time model system statistics</a></li> 
+prompt  <li><a class="toc" href="#h_time_model_det">Time model system stats (DB Time details)</a></li> 
 prompt  <li><a class="toc" href="#h_os_load">OS Load</a></li> 
 prompt  <li><a class="toc" href="#h_instance_activity">Instance activity</a></li> 
 prompt  <li><a class="toc" href="#h_wait_class_time">Time waited (by wait class)</a></li> 
@@ -1648,6 +1770,12 @@ prompt 	<div id="div_time_model_chart" style='width:1200px; height: 400px'></div
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
 prompt 	<div id="div_time_model_tab" style='width:1200px; height: 150px'></div>	
 prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
+
+prompt <h2 id="h_time_model_det"> Time model system stats (DB Time details) </h2>
+prompt <div id="div_time_model_det_chart" style='width:1200px; height: 400px'></div>
+prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in seconds):</font>
+prompt <div id="div_time_model_det_tab" style='width:1200px; height: 150px'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_os_load"> OS load </h2>
@@ -1709,6 +1837,7 @@ prompt <ul>
 prompt <li class="footnote">Graph note: drag to zoom, right click to reset</li>
 prompt <li class="footnote">Left click on a bar to filter the table by snapshot</li>
 prompt <li class="footnote">sql_id filters by prefix, enter "Snap total" as sql_id to filter records with snap aggregated values</li>
+prompt <li class="footnote">recursive statements exaggerate "Snap totals'" elapsed time (top level and recursive statements are double counted)</li>
 prompt </ul>
 prompt <div id="div_top_sqls_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left;'></div>
 prompt <div id="div_top_sqls_snap_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left'></div>
