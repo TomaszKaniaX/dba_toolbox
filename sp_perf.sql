@@ -169,11 +169,11 @@ prompt
 prompt       data.addRows([
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -205,7 +205,7 @@ select snap_time,chart_dt,ela_sec,cpu_cores,cpu_threads,fg_bg,
 sum(case when stat_name in('DB CPU','background cpu time') then sec else 0 end) as DB_CPU, 
 sum(case when stat_name in('DB time','background elapsed time') then sec else 0 end) as DB_TIME
 from stat
-where ela_sec is not null 
+where ela_sec <> 0 
 group by rollup(snap_time,chart_dt,ela_sec,cpu_cores,cpu_threads,fg_bg) 
 order by snap_time,fg_bg
 ), chart_data as
@@ -313,11 +313,11 @@ prompt
 prompt       data.addRows([
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -427,11 +427,11 @@ prompt       data.addRows([
 
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -523,11 +523,11 @@ prompt       data.addRows([
 
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -663,11 +663,11 @@ prompt       data.addRows([
 
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -805,11 +805,11 @@ prompt
 prompt       data.addRows([
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -951,11 +951,11 @@ prompt
 prompt       data.addRows([
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     --,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -1115,11 +1115,11 @@ prompt
 prompt       data.addRows([
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     --,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
@@ -1276,11 +1276,11 @@ prompt
 prompt       data.addRows([
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_snap_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_snap_sec
     ,startup_time,snapshot_exec_time_s
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from stats$snapshot
@@ -1737,11 +1737,11 @@ set markup html on head "" TABLE "class='sql' style='width:100%;'"
 col sql_id entmap off
 with snap as
 (
-  select snap_id,dbid,instance_number
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
     ,snap_time
     ,row_number() over (order by snap_id desc) rn
     ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-lag(snap_time) over (partition by startup_time order by snap_id)))*24*60*60) ela_snap_sec
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_snap_sec
     ,startup_time,snapshot_exec_time_s
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from stats$snapshot
