@@ -1,12 +1,13 @@
 /*
- * Script for statspack snapshots analysis
- * Run as statspack repository owner, typically "perfstat" user
+ * Script for AWR snapshots analysis
+ * Run as user with select privileges on DBA_HIST% and V$ views
  * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql
  * Author: Tomasz Kania
  * Ver: 0.01 beta
+ * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/
 */
 
-set linesize 2000 pagesize 0 long 2000000
+set linesize 2000 pagesize 0 long 512000 longchunksize 64000
 set termout off
 set trimspool on echo off feedback off 
 set verify off
@@ -33,9 +34,9 @@ var bdate varchar2(20)
 var edate varchar2(20)
 
 select 
-  to_char(greatest(trunc(sysdate)-3,min(snap_time)),'&&DT_FMT_REP') as bdate, 
-  to_char(least(trunc(sysdate),max(snap_time)),'&&DT_FMT_REP') as edate 
-from stats$snapshot;
+  to_char(greatest(trunc(sysdate)-3,min(end_interval_time)),'&&DT_FMT_REP') as bdate, 
+  to_char(least(trunc(sysdate),max(end_interval_time)),'&&DT_FMT_REP') as edate 
+from dba_hist_snapshot;
 
 whenever sqlerror exit
 
@@ -48,15 +49,15 @@ declare
   v_date1 date;
   v_date2 date;
 begin
-  select count(*),min(snap_time), max(snap_time) into v_nSnaps,v_OldestSnap,v_NewestSnap from stats$snapshot;  
+  select count(*),min(end_interval_time), max(end_interval_time) into v_nSnaps,v_OldestSnap,v_NewestSnap from dba_hist_snapshot;  
   if v_nSnaps < 8 then
     raise_application_error(-20001,'Insufficient data in statspack repository. '||to_char(v_nSnaps)||' snapshosts available, at least 8 snapsthots are required');
   else
     select 
-      greatest(trunc(sysdate)-3,min(snap_time)),
-      least(trunc(sysdate),max(snap_time))
+      greatest(trunc(sysdate)-3,min(end_interval_time)),
+      least(trunc(sysdate),max(end_interval_time))
       into v_date1,v_date2  
-    from stats$snapshot;
+    from dba_hist_snapshot;
     :bdate := to_char(v_date1,'&&DT_FMT_ISO');
     :edate := to_char(v_date2,'&&DT_FMT_ISO');
    
@@ -85,24 +86,24 @@ begin
   select min(snap_id) into v_bsnap 
   from
   (
-    select snap_id,lag(snap_id) over(order by snap_time) prev_snap,lead(snap_id) over(order by snap_time) next_snap,snap_time from stats$snapshot
+    select snap_id,lag(snap_id) over(order by end_interval_time) prev_snap,lead(snap_id) over(order by end_interval_time) next_snap,end_interval_time from dba_hist_snapshot
   ) 
   where 
-    snap_time >= to_date('&&bdate','&&DT_FMT_REP')
+    end_interval_time >= to_date('&&bdate','&&DT_FMT_REP')
     and prev_snap is not null 
     and next_snap is not null;
 
   select max(snap_id) into v_esnap 
   from
   (
-    select snap_id,lag(snap_id) over(order by snap_time) prev_snap,lead(snap_id) over(order by snap_time) next_snap,snap_time from stats$snapshot
+    select snap_id,lag(snap_id) over(order by end_interval_time) prev_snap,lead(snap_id) over(order by end_interval_time) next_snap,end_interval_time from dba_hist_snapshot
   ) 
   where 
-    snap_time < to_date('&&edate','&&DT_FMT_REP')+1
+    end_interval_time < to_date('&&edate','&&DT_FMT_REP')+1
     and snap_id > v_bsnap;
 
   select count(*) into v_nSnaps
-  from stats$snapshot
+  from dba_hist_snapshot
   where snap_id between v_bsnap and v_esnap;
   
   if v_nSnaps < 7 then
@@ -114,7 +115,6 @@ begin
     :esnap := v_esnap; 
     dbms_output.put_line('Analyzing '||to_char(v_nSnaps)||' snapshots');
   end if;
-
 end;
 /
 
@@ -122,9 +122,9 @@ end;
 prompt Generating report, it may take few minutes.... Please wait...
 set termout off
 
-def REPTITLE="Statspack report for &&db_n"
+def REPTITLE="AWR trends report for &&db_n"
 
-def MAINREPORTFILE=sp_rep_&&bdate._&&edate._&&inst_n..html
+def MAINREPORTFILE=awr_trends_&&bdate._&&edate._&&inst_n..html
 spool &&MAINREPORTFILE
 
 prompt <html>
@@ -171,34 +171,35 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),
 stat as
 (
 select snap_id,snap_time,chart_dt
   ,rn
-  ,stat_name
-  ,case when stat_name like 'background%' then 'Background' else 'Foreground' end fg_bg
+  ,stm.stat_name
+  ,case when stm.stat_name like 'background%' then 'Background' else 'Foreground' end fg_bg
   ,ela_sec
   ,ost.value as cpu_cores
   ,ost2.value as cpu_threads
   ,case
-    when lag(stm.value) over (partition by tms.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
-    else round((stm.value-lag(stm.value) over (partition by tms.stat_name order by snap_id))/1000000,2)
+    when lag(stm.value) over (partition by stm.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
+    else round((stm.value-lag(stm.value) over (partition by stm.stat_name order by snap_id))/1000000,2)
    end sec  
-from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
-join snap using(snap_id,dbid,instance_number)
-join stats$osstat ost using(snap_id,dbid,instance_number)
-join stats$osstat ost2 using(snap_id,dbid,instance_number)
-where stat_name in('DB time','DB CPU','background cpu time','background elapsed time')
-  and ost.osstat_id = 16 /* NUM_CPU_CORES */
-  and ost2.osstat_id = 0 /* NUM_CPUS */
+from dba_hist_sys_time_model stm join snap using(snap_id,dbid,instance_number)
+join dba_hist_osstat ost using(snap_id,dbid,instance_number)
+join dba_hist_osstat ost2 using(snap_id,dbid,instance_number)
+where stm.stat_name in('DB time','DB CPU','background cpu time','background elapsed time')
+  and ost.stat_id = 16 /* NUM_CPU_CORES */
+  and ost2.stat_id = 0 /* NUM_CPUS */
 ),
 group_stat as
 (
@@ -227,9 +228,9 @@ select
 from 
 group_stat 
 where ela_sec is not null 
-	and cpu_cores is not null 
-	and cpu_threads is not null 
-	and chart_dt is not null
+  and cpu_cores is not null 
+  and cpu_threads is not null 
+  and chart_dt is not null
 order by snap_time, nvl(fg_bg,'Total')
 )
 select 
@@ -245,6 +246,7 @@ select
   ']'||case when rn=1 then '' else ',' end
 from chart_data
 order by snap_time, fg_bg;
+
 
 
 prompt       ]);;
@@ -322,13 +324,15 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)  
 ),
 stat as
 (
@@ -338,10 +342,10 @@ select snap_id,dbid,instance_number
   ,stat_name
   ,ela_sec
   ,case
-    when lag(stm.value) over (partition by tms.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
-    else round((stm.value-lag(stm.value) over (partition by tms.stat_name order by snap_id))/1000000,2)
+    when lag(stm.value) over (partition by stm.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
+    else round((stm.value-lag(stm.value) over (partition by stm.stat_name order by snap_id))/1000000,2)
    end sec  
-from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+from dba_hist_sys_time_model stm
 join snap using(snap_id,dbid,instance_number)
 ),
 chart_data as
@@ -436,27 +440,25 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),stat as
 (
 select 
 snap_id,dbid,instance_number,stat_name,
 case 
-  when lag(o.value) over (partition by osstat_id order by snap_id) > o.value then o.value
-  else o.value-lag(o.value) over (partition by osstat_id order by snap_id)
+  when lag(o.value) over (partition by stat_id order by snap_id) > o.value then o.value
+  else o.value-lag(o.value) over (partition by stat_id order by snap_id)
 end val
-from
-stats$osstat o join snap using(snap_id, dbid, instance_number)
-join stats$osstatname osn using(osstat_id)
-where osn.stat_name in('IDLE_TIME','BUSY_TIME','USER_TIME','SYS_TIME','IOWAIT_TIME','LOAD','OS_CPU_WAIT_TIME')
+from dba_hist_osstat o join snap using(snap_id, dbid, instance_number)
+where o.stat_name in('IDLE_TIME','BUSY_TIME','USER_TIME','SYS_TIME','IOWAIT_TIME','LOAD','OS_CPU_WAIT_TIME')
 ),chart_data as
 (
 select 
@@ -499,8 +501,6 @@ select
 from
 chart_data join snap using(snap_id, dbid, instance_number)
 order by snap_id;
-
-
 
 prompt       ]);;
 prompt 
@@ -549,19 +549,19 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),sga_stat as
 (
 select snap_id,dbid,instance_number,rn,chart_dt,nvl(pool,name) pool,round(bytes/1024/1024) mb 
-from stats$sgastat join snap using(snap_id,dbid,instance_number)
+from dba_hist_sgastat join snap using(snap_id,dbid,instance_number)
 )
 select 
   '[new Date('||chart_dt||'),'||
@@ -591,7 +591,6 @@ pivot
     )
   )
 order by snap_id;
-
 
 prompt       ]);;
 prompt 
@@ -645,15 +644,15 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),iostat as
 (
 select 
@@ -692,7 +691,7 @@ select
     when lag(large_write_reqs) over (partition by function_id order by snap_id) > large_write_reqs then large_write_reqs
     else large_write_reqs-lag(large_write_reqs) over (partition by function_id order by snap_id)
    end large_write_reqs
-FROM stats$iostat_function if join stats$iostat_function_name ifn using(function_id)
+FROM dba_hist_iostat_function
 join snap using( snap_id,dbid,instance_number)
 order by snap_id,function_name
 ), mbs_by_func as
@@ -785,32 +784,32 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ), stat as
 (
 select 
  snap_id,dbid,instance_number,chart_dt
-,decode(name,'logons cumulative','logons','session logical reads','logical reads(blocks)','redo size','redo size(bytes)',name) stat_name
+,decode(stat_name,'logons cumulative','logons','session logical reads','logical reads(blocks)','redo size','redo size(bytes)',stat_name) stat_name
   ,case
-    when lag(st.value) over (partition by st.statistic# order by snap_id) >  st.value then st.value
-    else st.value-lag(st.value) over (partition by st.statistic# order by snap_id) 
+    when lag(st.value) over (partition by st.stat_id order by snap_id) >  st.value then st.value
+    else st.value-lag(st.value) over (partition by st.stat_id order by snap_id) 
    end value
  ,round(
   case
-    when lag(st.value) over (partition by st.statistic# order by snap_id) >  st.value then st.value
-    else st.value-lag(st.value) over (partition by st.statistic# order by snap_id) 
+    when lag(st.value) over (partition by st.stat_id order by snap_id) >  st.value then st.value
+    else st.value-lag(st.value) over (partition by st.stat_id order by snap_id) 
   end/ela_sec,2) value_per_sec
-  ,row_number() over(order by snap_id desc,name desc) rn
-from stats$sysstat st join snap  using(snap_id, dbid, instance_number)
-where name in
+  ,row_number() over(order by snap_id desc,stat_name desc) rn
+from dba_hist_sysstat st join snap using(snap_id, dbid, instance_number)
+where stat_name in
   (
     'user commits'
     ,'user rollbacks'
@@ -831,7 +830,7 @@ where name in
     ,'table scan blocks gotten'
     ,'table scan rows gotten'
   )
-order by snap_id,statistic#
+order by snap_id,stat_id
 )
 select --chart_dt,stat_name,value,value_per_sec,
   '[new Date('||chart_dt||'),'||
@@ -848,7 +847,6 @@ select --chart_dt,stat_name,value,value_per_sec,
 from stat
 where value is not null
 order by snap_id,stat_name;
-
 
 
 prompt       ]);;
@@ -927,22 +925,22 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),
 stat_cpu as
 (
 SELECT snap_id,dbid,instance_number
   ,upper(stat_name) stat_name
-  ,round((stm.value-lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id))/1000000,2) sec
-FROM stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+  ,round((value-lag(value) over (partition by startup_time,stat_name order by snap_id))/1000000,2) sec
+FROM dba_hist_sys_time_model
 join snap using(snap_id,dbid,instance_number)
 where upper(stat_name) in('BACKGROUND CPU TIME','DB CPU')
 ),
@@ -952,11 +950,11 @@ stat as
   from
   (
     select
-    snap_id,dbid,instance_number,e.wait_class,sum(time_waited_micro) as time_waited_micro
-    FROM stats$system_event se join v$event_name e using (event_id)
+      snap_id,dbid,instance_number,wait_class,sum(time_waited_micro) as time_waited_micro
+    from dba_hist_system_event  
       join snap using(snap_id,dbid,instance_number)
-    where e.wait_class <> 'Idle'
-    group by snap_id,dbid,instance_number,e.wait_class
+    where wait_class <> 'Idle'
+    group by snap_id,dbid,instance_number,wait_class
   ) 
 ), 
 chart_data_waits as
@@ -969,21 +967,21 @@ pivot
     sum(time_waited_sec)
     for wait_class in
       (
-        'Queueing' as "Queueing",
-        'User I/O' as "User I/O",
-        'Network' as "Network",
-        'Application' as "Application",
-        'Concurrency' as "Concurrency",
-        'Administrative' as "Administrative",
-        'Configuration' as "Configuration",
-        'Scheduler' as "Scheduler",
-        'Cluster' as "Cluster",
-        'Other' as "Other",        
-        'System I/O' as "System I/O",
-        'Commit' as "Commit"
+        'Queueing' as queueing,
+        'User I/O' as user_io,
+        'Network' as Network,
+        'Application' as Application,
+        'Concurrency' as Concurrency,
+        'Administrative' as Administrative,
+        'Configuration' as Configuration,
+        'Scheduler' as Scheduler,
+        'Cluster' as clust,
+        'Other' as Other,        
+        'System I/O' as system_io,
+        'Commit' as Commit_
       )
   ) 
-where "Commit" is not null
+where user_io is not null
 )
 ,chart_data_cpu as
 (
@@ -994,28 +992,28 @@ pivot
     max(sec)
     for (stat_name) in
     (
-      'DB CPU' as "DB CPU",
-      'BACKGROUND CPU TIME' as "background CPU"
+      'DB CPU' as DB_CPU,
+      'BACKGROUND CPU TIME' as background_CPU
     )
   )
-where "DB CPU" is not null
+where DB_CPU is not null
 )
 select 
   '[new Date('||chart_dt||'),'||
-  c."DB CPU"||','||
-  c."background CPU"||','||
-  w."Administrative"||','||
-  w."Application"||','||
-  nvl(w."Cluster",0)||','||
-  w."Commit"||','||
-  w."Concurrency"||','||
-  w."Configuration"||','||
-  w."Network"||','||
-  w."Other"||','||
-  w."Queueing"||','||
-  w."Scheduler"||','||
-  w."System I/O"||','||
-  w."User I/O"||
+  c.DB_CPU||','||
+  c.background_CPU||','||
+  w.Administrative||','||
+  w.Application||','||
+  nvl(w.Clust,0)||','||
+  w.Commit_||','||
+  w.Concurrency||','||
+  w.Configuration||','||
+  w.Network||','||
+  w.Other||','||
+  w.Queueing||','||
+  w.Scheduler||','||
+  w.System_io||','||
+  w.user_io||
   ']'||case when rn=1 then '' else ',' end
 from chart_data_waits w join chart_data_cpu c using(snap_id,dbid,instance_number) join snap using(snap_id,dbid,instance_number)
 order by snap_id;
@@ -1073,41 +1071,41 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     --,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),
 ev_hist as
 (
-SELECT snap_id,dbid,instance_number
-  ,row_number() over (order by snap_id desc,name desc) rn
-  ,e.name event_name
-  ,eh.wait_time_milli wtmil
+select snap_id,dbid,instance_number
+  ,row_number() over (order by snap_id desc,event_name desc) rn
+  ,event_name
+  ,wait_time_milli wtmil
   --,wait_count
   --,eh.wait_count-lag(eh.wait_count) over(partition by snap.startup_time,event_id,eh.wait_time_milli order by snap_id) wait_count
   ,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,event_id)*100,2) pct 
-FROM  stats$event_histogram eh join v$event_name e using (event_id)
-join snap using(snap_id,dbid,instance_number)
+from dba_hist_event_histogram 
+  join snap using(snap_id,dbid,instance_number)
 where 
-  e.name in
-	(
-		'log file sync'
-		,'db file sequential read'
-		,'log file parallel write'
-		,'db file scattered read'
-		,'direct path read'
-		,'direct path read temp'
-		,'direct path write temp'
-		,'db file parallel read'
-		,'flashback log file write'
-		,'control file sequential read'		
-	)
+  event_name in
+  (
+    'log file sync'
+    ,'db file sequential read'
+    ,'log file parallel write'
+    ,'db file scattered read'
+    ,'direct path read'
+    ,'direct path read temp'
+    ,'direct path write temp'
+    ,'db file parallel read'
+    ,'flashback log file write'
+    ,'control file sequential read'
+  )
 ),
 chart_data as
 (
@@ -1157,8 +1155,7 @@ from chart_data join snap using(snap_id,dbid,instance_number)
 order by snap_id,event_name;
 
 prompt       ]);;
-
-
+prompt
 prompt		var dashboard = new google.visualization.Dashboard(document.getElementById('div_event_hist'));;
 prompt
 prompt        var wclassCategory = new google.visualization.ControlWrapper({
@@ -1237,15 +1234,15 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
-    --,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
-    ,startup_time,snapshot_exec_time_s
-  from stats$snapshot
+    ,cast(end_interval_time as date) as snap_time
+    ,row_number() over (order by snap_id desc) rn
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
+    ,startup_time
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),
 ev_hist as
 (
@@ -1254,14 +1251,14 @@ SELECT snap_id,dbid,instance_number
   ,wait_time_milli wtmil
   ,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,wait_class)*100,2) pct
 FROM (SELECT snap_id,dbid,instance_number
-        ,e.wait_class
-        ,eh.wait_time_milli 
+        ,wait_class
+        ,wait_time_milli 
         ,sum(wait_count) wait_count
-      FROM  stats$event_histogram eh join v$event_name e using (event_id)
+      FROM dba_hist_event_histogram
       where wait_class <> 'Idle'
       group by snap_id,dbid,instance_number
-        ,e.wait_class
-        ,eh.wait_time_milli
+        ,wait_class
+        ,wait_time_milli
       )
 join snap using(snap_id,dbid,instance_number)
 ),
@@ -1371,6 +1368,8 @@ prompt     function drawTopSQLChart() {
 prompt       var data = new google.visualization.DataTable();;
 prompt       data.addColumn('datetime', 'Snapshot');;
 prompt       data.addColumn({type:'string',label:'sql_id'});;
+prompt       data.addColumn({type:'string',label:'PHV'});;
+prompt       data.addColumn({type:'string',label:'User'});;
 prompt       data.addColumn({type:'string',label:'module'});;
 prompt       data.addColumn('number', 'Executions');;
 prompt       data.addColumn('number', 'Buffer gets');;
@@ -1398,16 +1397,16 @@ prompt       data.addRows([
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_snap_sec
-    ,startup_time,snapshot_exec_time_s
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_snap_sec
+    ,startup_time
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
-  from stats$snapshot
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),
 stat_cpu as
 (
@@ -1417,12 +1416,12 @@ from
     select snap_id,dbid,instance_number
       ,upper(stat_name) stat_name
       ,case
-        when stm.value<lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id) then
+        when stm.value<lag(stm.value) over (partition by startup_time,stat_name order by snap_id) then
           round((stm.value)/1000000,2)
         else
-          round((stm.value-lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id))/1000000,2)
+          round((stm.value-lag(stm.value) over (partition by startup_time,stat_name order by snap_id))/1000000,2)
       end sec
-    from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+    from dba_hist_sys_time_model stm
     join snap using(snap_id,dbid,instance_number)
     where stat_name in('DB time','DB CPU')
   )
@@ -1432,79 +1431,27 @@ from
 sqls as
 (
   select snap_id,dbid,instance_number
-    ,s.sql_id
-    ,s.module
-    ,s.old_hash_value
-    ,nvl(s.executions,0) execs
-    ,nvl(s.buffer_gets,0) gets
-    ,nvl(s.cpu_time,0) cpu
-    ,nvl(s.elapsed_time,0) ela
-    ,nvl(s.user_io_wait_time,0) user_io
-    ,nvl(s.application_wait_time,0) appli
-    ,nvl(s.concurrency_wait_time,0) concurr
-    ,nvl(s.plsql_exec_time,0) plsql
-    ,nvl(s.rows_processed,0) rows_p
-    ,restart
+    ,sql_id
+    ,parsing_schema_name
+    ,module
+    ,plan_hash_value
+    ,executions_delta execs
+    ,buffer_gets_delta gets
+    ,cpu_time_delta cpu
+    ,elapsed_time_delta ela
+    ,iowait_delta user_io
+    ,apwait_delta appli
+    ,ccwait_delta concurr
+    ,plsexec_time_delta plsql
+    ,rows_processed_delta rows_p
     ,ela_snap_sec
     ,chart_dt
-  FROM stats$sql_summary s join snap using(snap_id,dbid,instance_number)
+  FROM dba_hist_sqlstat  join snap using(snap_id,dbid,instance_number)
 ),
 sdiff as
 (
-select
-  snap_id,dbid,instance_number,ela_snap_sec,chart_dt
-  ,sql_id,module,old_hash_value
-  ,case
-    when execs < lag(execs) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when execs < lag(execs) over(partition by sql_id order by snap_id) and restart = 1 then execs
-    else execs - lag(execs) over(partition by sql_id order by snap_id)
-   end execs
-  ,case
-    when gets < lag(gets) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when gets < lag(gets) over(partition by sql_id order by snap_id) and restart = 1 then gets
-    else gets - lag(gets) over(partition by sql_id order by snap_id)
-   end gets
-  ,case
-    when cpu < lag(cpu) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when cpu < lag(cpu) over(partition by sql_id order by snap_id) and restart = 1 then cpu
-    else cpu - lag(cpu) over(partition by sql_id order by snap_id)
-   end cpu
-  ,case
-    when ela < lag(ela) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when ela < lag(ela) over(partition by sql_id order by snap_id) and restart = 1 then ela
-    else ela - lag(ela) over(partition by sql_id order by snap_id)
-   end ela
-  ,case
-    when user_io < lag(user_io) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when user_io < lag(user_io) over(partition by sql_id order by snap_id) and restart = 1 then user_io
-    else user_io - lag(user_io) over(partition by sql_id order by snap_id)
-   end user_io
-  ,case
-    when appli < lag(appli) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when appli < lag(appli) over(partition by sql_id order by snap_id) and restart = 1 then appli
-    else appli - lag(appli) over(partition by sql_id order by snap_id)
-   end appli
-  ,case
-    when concurr < lag(concurr) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when concurr < lag(concurr) over(partition by sql_id order by snap_id) and restart = 1 then concurr
-    else concurr - lag(concurr) over(partition by sql_id order by snap_id)
-   end concurr
-  ,case
-    when plsql < lag(plsql) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when plsql < lag(plsql) over(partition by sql_id order by snap_id) and restart = 1 then plsql
-    else plsql - lag(plsql) over(partition by sql_id order by snap_id)
-   end plsql
-  ,case
-    when rows_p < lag(rows_p) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when rows_p < lag(rows_p) over(partition by sql_id order by snap_id) and restart = 1 then rows_p
-    else rows_p - lag(rows_p) over(partition by sql_id order by snap_id)
-   end rows_p
-from sqls
-)
-, sdiff2 as
-(
 select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
-  ,sql_id, module, old_hash_value
+  ,sql_id, plan_hash_value,module,parsing_schema_name
   ,execs
   ,gets
   ,round(gets/decode(execs,0,1,execs),2) gets_exec
@@ -1526,7 +1473,7 @@ select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
   ,row_number() over (partition by snap_id order by ela desc) top_n_ela
   ,row_number() over (partition by snap_id order by cpu desc) top_n_cpu
   --,row_number() over (order by snap_id,ela desc) rn
-from sdiff
+from sqls
 where execs is not null
 ),chart_data as
 (
@@ -1535,11 +1482,17 @@ select
   chart_dt
   ,snap_id
   ,nvl(sql_id,'Snap Total:') sql_id
+  ,nvl(plan_hash_value,0) plan_hash_value
+  ,nvl(parsing_schema_name,'[null]') parsing_schema_name
   ,nvl(module,'[null]') module
+   /*
    ,grouping(chart_dt)
    ,grouping(snap_id)
    ,grouping(sql_id)
    ,grouping(module)
+   ,grouping(plan_hash_value)
+   ,grouping(parsing_schema_name)
+   */
   ,sum(execs) execs
   ,sum(gets) gets
   ,sum(gets_exec) gets_exec
@@ -1559,17 +1512,19 @@ select
   ,sum(rows_exec) rows_exec
   ,max(db_cpu) db_cpu
   ,max(db_time) db_time
-from sdiff2 join stat_cpu using(snap_id,dbid,instance_number)
+from sdiff join stat_cpu using(snap_id,dbid,instance_number)
 where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
-group by rollup(chart_dt,snap_id,sql_id,module)
-having ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 0 and grouping(module) = 0 )
+group by rollup(chart_dt,snap_id,sql_id,plan_hash_value,parsing_schema_name,module)
+having ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 0 and grouping(module) = 0 and grouping(plan_hash_value) = 0 and grouping(parsing_schema_name) = 0)
   or ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 1 )
-order by snap_id,9
+order by snap_id,12
 )
-select
+select 
   decode(rownum,1,'',',')||
     '[new Date('||chart_dt||'),'||
-  ''''||sql_id||''','||  
+  ''''||sql_id||''','||
+  ''''||plan_hash_value||''','||
+  ''''||parsing_schema_name||''','||    
   ''''||module||''','||  
   execs||','||
   gets||','||
@@ -1595,15 +1550,12 @@ select
   ||']' 
 from chart_data;
 
-
 prompt       ]);;
-
-
 
 prompt
 prompt		var chartView = new google.visualization.DataView(data);;
 prompt		chartView.setRows(chartView.getFilteredRows([{column: 1, value: 'Snap Total:'}]));;
-prompt		chartView.setColumns([0, 6, 10, 16, 18]);;
+prompt		chartView.setColumns([0, 8, 12, 18, 20]);;
 prompt
 prompt       var chart = new google.visualization.ChartWrapper({
 prompt          chartType: 'ColumnChart',
@@ -1662,7 +1614,7 @@ prompt		var table = new google.visualization.ChartWrapper({
 prompt          chartType: 'Table',
 prompt          containerId: 'div_top_sqls_tab',
 prompt          options: {allowHtml: true, width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}},
-prompt		  view: {columns: [0,1,2,3,4,5,6,8,9,10,12,13,14,15,16,17,18,19,20,21,22,23]}  
+prompt		  view: {columns: [0,1,2,3,4,5,6,8,9,10,12,13,14,15,16,17,18,19,20,21,22,23,24,25]}  
 prompt        });;	
 prompt
 prompt      dashboard.bind([sqlid_filter,snap_filter], [table]);;
@@ -1736,13 +1688,13 @@ select 'Physical mem (GB):',round(value/1024/1024/1024) From v$osstat where osst
 
 
 set markup html on head "" TABLE "class='sql' style='width:600px;'"
-select 'Begin snap:' as " ",snap_id,to_char(snap_time,'YYYY-MM-DD HH24:MI') snap_time,to_char((snap_time-startup_time) day(3) to second(0),'DDD HH24:MI:SS') uptime,value as sessions
-from stats$snapshot join stats$sysstat ss using(snap_id,dbid,instance_number)
-where snap_id=:bsnap and ss.name='logons current'
+select 'Begin snap:' as " ",snap_id,to_char(end_interval_time,'YYYY-MM-DD HH24:MI') snap_time,to_char((end_interval_time-startup_time) day(3) to second(0),'DDD HH24:MI:SS') uptime,value as sessions
+from dba_hist_snapshot join dba_hist_sysstat ss using(snap_id,dbid,instance_number)
+where snap_id=:bsnap and ss.stat_name='logons current'
 union all
-select 'End snap:' as " ",snap_id,to_char(snap_time,'YYYY-MM-DD HH24:MI') snap_time,to_char((snap_time-startup_time) day(3) to second(0),'DDD HH24:MI:SS') uptime,value 
-from stats$snapshot join stats$sysstat ss using(snap_id,dbid,instance_number)
-where snap_id=:esnap and ss.name='logons current';
+select 'Begin snap:' as " ",snap_id,to_char(end_interval_time,'YYYY-MM-DD HH24:MI') snap_time,to_char((end_interval_time-startup_time) day(3) to second(0),'DDD HH24:MI:SS') uptime,value as sessions
+from dba_hist_snapshot join dba_hist_sysstat ss using(snap_id,dbid,instance_number)
+where snap_id=:esnap and ss.stat_name='logons current';
 
 set pagesize 0
 set markup html off
@@ -1837,7 +1789,6 @@ prompt <ul>
 prompt <li class="footnote">Graph note: drag to zoom, right click to reset</li>
 prompt <li class="footnote">Left click on a bar to filter the table by snapshot</li>
 prompt <li class="footnote">sql_id filters by prefix, enter "Snap total" as sql_id to filter records with snap aggregated values</li>
-prompt <li class="footnote">recursive statements exaggerate "Snap totals'" elapsed time (top level and recursive statements are double counted)</li>
 prompt </ul>
 prompt <div id="div_top_sqls_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left;'></div>
 prompt <div id="div_top_sqls_snap_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left'></div>
@@ -1852,14 +1803,11 @@ prompt 		  sqlid_filter.draw();
 prompt 		}
 prompt     </script>
 prompt </div>
-prompt <div id="div_top_sqls_tab" style='width:100%; height:150px;clear:left;'></div>
+prompt <div id="div_top_sqls_tab" style='width:100%; height:200px;clear:left;'></div>
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_sql_text"> List of SQL Text </h2>
-prompt <ul>
-prompt	<li>SQL text truncated to first 4000 characters</li>
-prompt </ul>
 
 set pagesize 40000
 set markup html on head "" TABLE "class='sql' style='width:100%;'"
@@ -1867,67 +1815,42 @@ col sql_id entmap off
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
-    ,snap_time
+    ,cast(end_interval_time as date) as snap_time
     ,row_number() over (order by snap_id desc) rn
-    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
-    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_snap_sec
-    ,startup_time,snapshot_exec_time_s
+    ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
+    ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_snap_sec
+    ,startup_time
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
-  from stats$snapshot
+  from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-  and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+    and dbid = (select dbid from v$database)
+    and instance_number = (select instance_number from v$instance)
 ),
 sqls as
 (
   select snap_id,dbid,instance_number
-    ,s.sql_id
-    ,s.old_hash_value
-    ,nvl(s.executions,0) execs
-    ,nvl(s.buffer_gets,0) gets
-    ,nvl(s.cpu_time,0) cpu
-    ,nvl(s.elapsed_time,0) ela
-    ,nvl(s.user_io_wait_time,0) user_io
-    ,nvl(s.application_wait_time,0) appli
-    ,nvl(s.concurrency_wait_time,0) concurr
-    ,nvl(s.plsql_exec_time,0) plsql
-    ,nvl(s.rows_processed,0) rows_p
-    ,restart
+    ,sql_id
+    ,parsing_schema_name
+    ,module
+    ,plan_hash_value
+    ,executions_delta execs
+    ,buffer_gets_delta gets
+    ,cpu_time_delta cpu
+    ,elapsed_time_delta ela
+    ,iowait_delta user_io
+    ,apwait_delta appli
+    ,ccwait_delta concurr
+    ,plsexec_time_delta plsql
+    ,rows_processed_delta rows_p
     ,ela_snap_sec
     ,chart_dt
-  FROM stats$sql_summary s join snap using(snap_id,dbid,instance_number)
+  FROM dba_hist_sqlstat  join snap using(snap_id,dbid,instance_number)
 ),
-sdiff as
-(
-select
-  snap_id,dbid,instance_number ,ela_snap_sec,chart_dt
-  ,sql_id,old_hash_value
-  ,case
-    when execs < lag(execs) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when execs < lag(execs) over(partition by sql_id order by snap_id) and restart = 1 then execs
-    else execs - lag(execs) over(partition by sql_id order by snap_id)
-   end execs
-  ,case
-    when gets < lag(gets) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when gets < lag(gets) over(partition by sql_id order by snap_id) and restart = 1 then gets
-    else gets - lag(gets) over(partition by sql_id order by snap_id)
-   end gets
-  ,case
-    when cpu < lag(cpu) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when cpu < lag(cpu) over(partition by sql_id order by snap_id) and restart = 1 then cpu
-    else cpu - lag(cpu) over(partition by sql_id order by snap_id)
-   end cpu
-  ,case
-    when ela < lag(ela) over(partition by sql_id order by snap_id) and restart = 0 then 0
-    when ela < lag(ela) over(partition by sql_id order by snap_id) and restart = 1 then ela
-    else ela - lag(ela) over(partition by sql_id order by snap_id)
-   end ela
-from sqls
-)
-, sdiff2 as
+sdiff2 as
 (
 select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
-  ,sql_id, old_hash_value
+  ,sql_id, plan_hash_value,module,parsing_schema_name as schema
+  ,execs
   ,gets
   ,round(gets/decode(execs,0,1,execs),2) gets_exec
   ,round(cpu/1000000,2) cpu_sec
@@ -1936,7 +1859,8 @@ select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
   ,round(ela/decode(execs,0,1,execs)/1000000,4) ela_sec_exec
   ,row_number() over (partition by snap_id order by ela desc) top_n_ela
   ,row_number() over (partition by snap_id order by cpu desc) top_n_cpu
-from sdiff
+  --,row_number() over (order by snap_id,ela desc) rn
+from sqls
 where execs is not null
 ),sql_ids
 as(
@@ -1946,12 +1870,13 @@ from sdiff2
 where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
 )
 select 
-	'<div id="'||sql_id||'">'||sql_id||'</div>' sql_id
-	,listagg(sql_text,'') within group(order by piece) as sql_text
-from stats$sqltext
-where sql_id in (select sql_id from sql_ids) and piece <= 61 /*trunc sql_text to 4000 chars*/
-group by sql_id
+  '<div id="'||sql_id||'">'||sql_id||'</div>' sql_id
+  --,dbms_lob.substr(sql_text,4000,1) sql_text
+  ,sql_text
+from dba_hist_sqltext
+where sql_id in (select sql_id from sql_ids)
 order by sql_id;
+
 set markup html off
 
 prompt <a class="fnnav" href="#h_toc">back to top</a>
