@@ -125,7 +125,7 @@ set termout off
 
 def REPTITLE="Statspack trends report for &&db_n"
 
-def MAINREPORTFILE=sp_trends_&&bdate._&&edate._&&inst_n..html
+def MAINREPORTFILE=sp_trends_&&inst_n._&&bdate._&&edate..html
 spool &&MAINREPORTFILE
 
 prompt <html>
@@ -1115,22 +1115,22 @@ chart_data as
 select snap_id,dbid,instance_number
   ,row_number() over (order by snap_id desc,event_name desc) rn
   ,event_name
-  ,max(decode(wtmil,1,pct,0)) as "< 1ms"
-  ,max(decode(wtmil,2,pct,0)) as "< 2ms"
-  ,max(decode(wtmil,4,pct,0)) as "< 4ms"
-  ,max(decode(wtmil,8,pct,0)) as "< 8ms"
-  ,max(decode(wtmil,16,pct,0)) as "< 16ms"
-  ,max(decode(wtmil,32,pct,0)) as "< 32ms"
-  ,max(decode(wtmil,64,pct,0)) as "< 64ms"
-  ,max(decode(wtmil,128,pct,0)) as "< 128ms"
-  ,max(decode(wtmil,256,pct,0)) as "< 256ms"
-  ,max(decode(wtmil,512,pct,0)) as "< 0.5s"
-  ,max(decode(wtmil,1024,pct,0)) as "< 1s"
-  ,max(decode(wtmil,2048,pct,0)) as "< 2s"
-  ,max(decode(wtmil,4096,pct,0)) as "< 4s"
-  ,max(decode(wtmil,8192,pct,0)) as "< 8s"
-  ,max(decode(wtmil,16384,pct,0)) as "< 16s"
-  ,max(case when wtmil > 16384 then pct else 0 end) as "> 16s"  
+  ,sum(case when wtmil <= 1 then pct else 0 end) as "< 1ms"
+  ,sum(decode(wtmil,2,pct,0)) as "< 2ms"
+  ,sum(decode(wtmil,4,pct,0)) as "< 4ms"
+  ,sum(decode(wtmil,8,pct,0)) as "< 8ms"
+  ,sum(decode(wtmil,16,pct,0)) as "< 16ms"
+  ,sum(decode(wtmil,32,pct,0)) as "< 32ms"
+  ,sum(decode(wtmil,64,pct,0)) as "< 64ms"
+  ,sum(decode(wtmil,128,pct,0)) as "< 128ms"
+  ,sum(decode(wtmil,256,pct,0)) as "< 256ms"
+  ,sum(decode(wtmil,512,pct,0)) as "< 0.5s"
+  ,sum(decode(wtmil,1024,pct,0)) as "< 1s"
+  ,sum(decode(wtmil,2048,pct,0)) as "< 2s"
+  ,sum(decode(wtmil,4096,pct,0)) as "< 4s"
+  ,sum(decode(wtmil,8192,pct,0)) as "< 8s"
+  ,sum(decode(wtmil,16384,pct,0)) as "< 16s"
+  ,sum(case when wtmil > 16384 then pct else 0 end) as "> 16s"  
 from ev_hist 
 group by snap_id,dbid,instance_number,event_name
 ) 
@@ -1271,22 +1271,22 @@ chart_data as
 select snap_id,dbid,instance_number
   ,wait_class
   ,row_number() over (order by snap_id desc,wait_class desc) rn
-  ,max(decode(wtmil,1,pct,0)) as "< 1ms"
-  ,max(decode(wtmil,2,pct,0)) as "< 2ms"
-  ,max(decode(wtmil,4,pct,0)) as "< 4ms"
-  ,max(decode(wtmil,8,pct,0)) as "< 8ms"
-  ,max(decode(wtmil,16,pct,0)) as "< 16ms"
-  ,max(decode(wtmil,32,pct,0)) as "< 32ms"
-  ,max(decode(wtmil,64,pct,0)) as "< 64ms"
-  ,max(decode(wtmil,128,pct,0)) as "< 128ms"
-  ,max(decode(wtmil,256,pct,0)) as "< 256ms"
-  ,max(decode(wtmil,512,pct,0)) as "< 0.5s"
-  ,max(decode(wtmil,1024,pct,0)) as "< 1s"
-  ,max(decode(wtmil,2048,pct,0)) as "< 2s"
-  ,max(decode(wtmil,4096,pct,0)) as "< 4s"
-  ,max(decode(wtmil,8192,pct,0)) as "< 8s"
-  ,max(decode(wtmil,16384,pct,0)) as "< 16s"
-  ,max(case when wtmil > 16384 then pct else 0 end) as "> 16s"
+  ,sum(case when wtmil <= 1 then pct else 0 end) as "< 1ms"
+  ,sum(decode(wtmil,2,pct,0)) as "< 2ms"
+  ,sum(decode(wtmil,4,pct,0)) as "< 4ms"
+  ,sum(decode(wtmil,8,pct,0)) as "< 8ms"
+  ,sum(decode(wtmil,16,pct,0)) as "< 16ms"
+  ,sum(decode(wtmil,32,pct,0)) as "< 32ms"
+  ,sum(decode(wtmil,64,pct,0)) as "< 64ms"
+  ,sum(decode(wtmil,128,pct,0)) as "< 128ms"
+  ,sum(decode(wtmil,256,pct,0)) as "< 256ms"
+  ,sum(decode(wtmil,512,pct,0)) as "< 0.5s"
+  ,sum(decode(wtmil,1024,pct,0)) as "< 1s"
+  ,sum(decode(wtmil,2048,pct,0)) as "< 2s"
+  ,sum(decode(wtmil,4096,pct,0)) as "< 4s"
+  ,sum(decode(wtmil,8192,pct,0)) as "< 8s"
+  ,sum(decode(wtmil,16384,pct,0)) as "< 16s"
+  ,sum(case when wtmil > 16384 then pct else 0 end) as "> 16s"
 from ev_hist
 group by snap_id,dbid,instance_number,wait_class
 )
@@ -1836,9 +1836,10 @@ prompt <div id="div_top_sqls_chart" style='width:1200px; height: 500px'></div>
 prompt <div id="div_top_sqls">
 prompt <ul>
 prompt <li class="footnote">Graph note: drag to zoom, right click to reset</li>
-prompt <li class="footnote">Left click on a bar to filter the table by snapshot</li>
+prompt <li class="footnote">left click on a bar on the chart to filter data in table by snapshot</li>
 prompt <li class="footnote">sql_id filters by prefix, enter "Snap total" as sql_id to filter records with snap aggregated values</li>
 prompt <li class="footnote">recursive statements exaggerate "Snap totals'" elapsed time (top level and recursive statements are double counted)</li>
+prompt <li class="footnote">click on the column header to sort data</li>
 prompt </ul>
 prompt <div id="div_top_sqls_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left;'></div>
 prompt <div id="div_top_sqls_snap_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left'></div>
@@ -1865,6 +1866,7 @@ prompt </ul>
 set pagesize 40000
 set markup html on head "" TABLE "class='sql' style='width:100%;'"
 col sql_id entmap off
+col sql_text entmap off
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
@@ -1948,7 +1950,7 @@ where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
 )
 select 
 	'<div id="'||sql_id||'">'||sql_id||'</div>' sql_id
-	,listagg(sql_text,'') within group(order by piece) as sql_text
+	,'<pre>'||listagg(sql_text,'') within group(order by piece)||'</pre>' as sql_text
 from stats$sqltext
 where sql_id in (select sql_id from sql_ids) and piece <= 61 /*trunc sql_text to 4000 chars*/
 group by sql_id

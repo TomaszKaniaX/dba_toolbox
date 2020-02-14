@@ -7,7 +7,7 @@
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/
 */
 
-set linesize 2000 pagesize 0 long 512000 longchunksize 64000
+set linesize 2000 pagesize 0 long 32000 longchunksize 32000
 set termout off
 set trimspool on echo off feedback off 
 set verify off
@@ -33,14 +33,29 @@ def DT_FMT_ISO="YYYY-MM-DD HH24:MI"
 var bdate varchar2(20)
 var edate varchar2(20)
 
+
+whenever sqlerror exit
+set termout on
+
+declare
+  v_mgmt_lic varchar2(100);
+begin
+  select upper(value) into v_mgmt_lic from v$parameter where lower(name) = 'control_management_pack_access';
+  if v_mgmt_lic like 'DIAGNOSTIC%' then
+    dbms_output.put_line('* Diagnostic Pack is enabled');
+  else
+    raise_application_error(-20999,'Diagnostic Pack is disabled - AWR is not available.'||chr(10)||'Consider using statspack');
+  end if;
+end;
+/
+
+
 select 
   to_char(greatest(trunc(sysdate)-3,min(end_interval_time)),'&&DT_FMT_REP') as bdate, 
   to_char(least(trunc(sysdate),max(end_interval_time)),'&&DT_FMT_REP') as edate 
 from dba_hist_snapshot;
 
-whenever sqlerror exit
 
-set termout on
 
 declare 
   v_nSnaps number;
@@ -124,7 +139,7 @@ set termout off
 
 def REPTITLE="AWR trends report for &&db_n"
 
-def MAINREPORTFILE=awr_trends_&&bdate._&&edate._&&inst_n..html
+def MAINREPORTFILE=awr_trends_&&inst_n._&&bdate._&&edate..html
 spool &&MAINREPORTFILE
 
 prompt <html>
@@ -1112,22 +1127,22 @@ chart_data as
 select snap_id,dbid,instance_number
   ,row_number() over (order by snap_id desc,event_name desc) rn
   ,event_name
-  ,max(decode(wtmil,1,pct,0)) as "< 1ms"
-  ,max(decode(wtmil,2,pct,0)) as "< 2ms"
-  ,max(decode(wtmil,4,pct,0)) as "< 4ms"
-  ,max(decode(wtmil,8,pct,0)) as "< 8ms"
-  ,max(decode(wtmil,16,pct,0)) as "< 16ms"
-  ,max(decode(wtmil,32,pct,0)) as "< 32ms"
-  ,max(decode(wtmil,64,pct,0)) as "< 64ms"
-  ,max(decode(wtmil,128,pct,0)) as "< 128ms"
-  ,max(decode(wtmil,256,pct,0)) as "< 256ms"
-  ,max(decode(wtmil,512,pct,0)) as "< 0.5s"
-  ,max(decode(wtmil,1024,pct,0)) as "< 1s"
-  ,max(decode(wtmil,2048,pct,0)) as "< 2s"
-  ,max(decode(wtmil,4096,pct,0)) as "< 4s"
-  ,max(decode(wtmil,8192,pct,0)) as "< 8s"
-  ,max(decode(wtmil,16384,pct,0)) as "< 16s"
-  ,max(case when wtmil > 16384 then pct else 0 end) as "> 16s"  
+  ,sum(case when wtmil <= 1 then pct else 0 end) as "< 1ms"
+  ,sum(decode(wtmil,2,pct,0)) as "< 2ms"
+  ,sum(decode(wtmil,4,pct,0)) as "< 4ms"
+  ,sum(decode(wtmil,8,pct,0)) as "< 8ms"
+  ,sum(decode(wtmil,16,pct,0)) as "< 16ms"
+  ,sum(decode(wtmil,32,pct,0)) as "< 32ms"
+  ,sum(decode(wtmil,64,pct,0)) as "< 64ms"
+  ,sum(decode(wtmil,128,pct,0)) as "< 128ms"
+  ,sum(decode(wtmil,256,pct,0)) as "< 256ms"
+  ,sum(decode(wtmil,512,pct,0)) as "< 0.5s"
+  ,sum(decode(wtmil,1024,pct,0)) as "< 1s"
+  ,sum(decode(wtmil,2048,pct,0)) as "< 2s"
+  ,sum(decode(wtmil,4096,pct,0)) as "< 4s"
+  ,sum(decode(wtmil,8192,pct,0)) as "< 8s"
+  ,sum(decode(wtmil,16384,pct,0)) as "< 16s"
+  ,sum(case when wtmil > 16384 then pct else 0 end) as "> 16s"  
 from ev_hist 
 group by snap_id,dbid,instance_number,event_name
 ) 
@@ -1267,22 +1282,22 @@ chart_data as
 select snap_id,dbid,instance_number
   ,wait_class
   ,row_number() over (order by snap_id desc,wait_class desc) rn
-  ,max(decode(wtmil,1,pct,0)) as "< 1ms"
-  ,max(decode(wtmil,2,pct,0)) as "< 2ms"
-  ,max(decode(wtmil,4,pct,0)) as "< 4ms"
-  ,max(decode(wtmil,8,pct,0)) as "< 8ms"
-  ,max(decode(wtmil,16,pct,0)) as "< 16ms"
-  ,max(decode(wtmil,32,pct,0)) as "< 32ms"
-  ,max(decode(wtmil,64,pct,0)) as "< 64ms"
-  ,max(decode(wtmil,128,pct,0)) as "< 128ms"
-  ,max(decode(wtmil,256,pct,0)) as "< 256ms"
-  ,max(decode(wtmil,512,pct,0)) as "< 0.5s"
-  ,max(decode(wtmil,1024,pct,0)) as "< 1s"
-  ,max(decode(wtmil,2048,pct,0)) as "< 2s"
-  ,max(decode(wtmil,4096,pct,0)) as "< 4s"
-  ,max(decode(wtmil,8192,pct,0)) as "< 8s"
-  ,max(decode(wtmil,16384,pct,0)) as "< 16s"
-  ,max(case when wtmil > 16384 then pct else 0 end) as "> 16s"
+  ,sum(case when wtmil <= 1 then pct else 0 end) as "< 1ms"
+  ,sum(decode(wtmil,2,pct,0)) as "< 2ms"
+  ,sum(decode(wtmil,4,pct,0)) as "< 4ms"
+  ,sum(decode(wtmil,8,pct,0)) as "< 8ms"
+  ,sum(decode(wtmil,16,pct,0)) as "< 16ms"
+  ,sum(decode(wtmil,32,pct,0)) as "< 32ms"
+  ,sum(decode(wtmil,64,pct,0)) as "< 64ms"
+  ,sum(decode(wtmil,128,pct,0)) as "< 128ms"
+  ,sum(decode(wtmil,256,pct,0)) as "< 256ms"
+  ,sum(decode(wtmil,512,pct,0)) as "< 0.5s"
+  ,sum(decode(wtmil,1024,pct,0)) as "< 1s"
+  ,sum(decode(wtmil,2048,pct,0)) as "< 2s"
+  ,sum(decode(wtmil,4096,pct,0)) as "< 4s"
+  ,sum(decode(wtmil,8192,pct,0)) as "< 8s"
+  ,sum(decode(wtmil,16384,pct,0)) as "< 16s"
+  ,sum(case when wtmil > 16384 then pct else 0 end) as "> 16s"
 from ev_hist
 group by snap_id,dbid,instance_number,wait_class
 )
@@ -1368,9 +1383,11 @@ prompt     function drawTopSQLChart() {
 prompt       var data = new google.visualization.DataTable();;
 prompt       data.addColumn('datetime', 'Snapshot');;
 prompt       data.addColumn({type:'string',label:'sql_id'});;
+--prompt       data.addColumn({type:'string',label:'sql_text',role:'tooltip'});;
 prompt       data.addColumn({type:'string',label:'PHV'});;
 prompt       data.addColumn({type:'string',label:'User'});;
 prompt       data.addColumn({type:'string',label:'module'});;
+prompt       data.addColumn({type:'string',label:'action',role:'tooltip'});;
 prompt       data.addColumn('number', 'Executions');;
 prompt       data.addColumn('number', 'Buffer gets');;
 prompt       data.addColumn('number', 'Buf gets/exec');;
@@ -1434,6 +1451,7 @@ sqls as
     ,sql_id
     ,parsing_schema_name
     ,module
+    ,action
     ,plan_hash_value
     ,executions_delta execs
     ,buffer_gets_delta gets
@@ -1451,7 +1469,7 @@ sqls as
 sdiff as
 (
 select snap_id, dbid, instance_number,ela_snap_sec,chart_dt
-  ,sql_id, plan_hash_value,module,parsing_schema_name
+  ,sql_id, plan_hash_value,module,action,parsing_schema_name
   ,execs
   ,gets
   ,round(gets/decode(execs,0,1,execs),2) gets_exec
@@ -1485,6 +1503,7 @@ select
   ,nvl(plan_hash_value,0) plan_hash_value
   ,nvl(parsing_schema_name,'[null]') parsing_schema_name
   ,nvl(module,'[null]') module
+  ,nvl(action,'[null]') action
    /*
    ,grouping(chart_dt)
    ,grouping(snap_id)
@@ -1514,18 +1533,20 @@ select
   ,max(db_time) db_time
 from sdiff join stat_cpu using(snap_id,dbid,instance_number)
 where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
-group by rollup(chart_dt,snap_id,sql_id,plan_hash_value,parsing_schema_name,module)
-having ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 0 and grouping(module) = 0 and grouping(plan_hash_value) = 0 and grouping(parsing_schema_name) = 0)
+group by rollup(chart_dt,snap_id,sql_id,plan_hash_value,parsing_schema_name,module,action)
+having ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 0 and grouping(module) = 0 and grouping(action) = 0 and grouping(plan_hash_value) = 0 and grouping(parsing_schema_name) = 0)
   or ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 1 )
-order by snap_id,12
+order by snap_id,13
 )
 select 
   decode(rownum,1,'',',')||
     '[new Date('||chart_dt||'),'||
   ''''||sql_id||''','||
+  --''''||replace(replace(replace((select dbms_lob.substr(sql_text,200,1) from dba_hist_sqltext where sql_id = chart_data.sql_id and rownum <=1),'''','`'),chr(10),''),chr(13),'')||''','||
   ''''||plan_hash_value||''','||
   ''''||parsing_schema_name||''','||    
-  ''''||module||''','||  
+  ''''||module||''','||
+  ''''||action||''','||  
   execs||','||
   gets||','||
   decode(sql_id,'Snap Total:',0,gets_exec)||','||
@@ -1550,12 +1571,13 @@ select
   ||']' 
 from chart_data;
 
+
 prompt       ]);;
 
 prompt
 prompt		var chartView = new google.visualization.DataView(data);;
 prompt		chartView.setRows(chartView.getFilteredRows([{column: 1, value: 'Snap Total:'}]));;
-prompt		chartView.setColumns([0, 8, 12, 18, 20]);;
+prompt		chartView.setColumns([0, 8, 13, 19, 21]);;
 prompt
 prompt       var chart = new google.visualization.ChartWrapper({
 prompt          chartType: 'ColumnChart',
@@ -1614,7 +1636,7 @@ prompt		var table = new google.visualization.ChartWrapper({
 prompt          chartType: 'Table',
 prompt          containerId: 'div_top_sqls_tab',
 prompt          options: {allowHtml: true, width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}},
-prompt		  view: {columns: [0,1,2,3,4,5,6,8,9,10,12,13,14,15,16,17,18,19,20,21,22,23,24,25]}  
+prompt		  view: {columns: [0,1,2,3,4,5,6,8,9,10,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]}  
 prompt        });;	
 prompt
 prompt      dashboard.bind([sqlid_filter,snap_filter], [table]);;
@@ -1787,8 +1809,9 @@ prompt <div id="div_top_sqls_chart" style='width:1200px; height: 500px'></div>
 prompt <div id="div_top_sqls">
 prompt <ul>
 prompt <li class="footnote">Graph note: drag to zoom, right click to reset</li>
-prompt <li class="footnote">Left click on a bar to filter the table by snapshot</li>
+prompt <li class="footnote">left click on a bar on the chart to filter data in table by snapshot</li>
 prompt <li class="footnote">sql_id filters by prefix, enter "Snap total" as sql_id to filter records with snap aggregated values</li>
+prompt <li class="footnote">Click on column header to sort data</li>
 prompt </ul>
 prompt <div id="div_top_sqls_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left;'></div>
 prompt <div id="div_top_sqls_snap_filter" style='width:250px;padding-top:10px;padding-bottom:10px;float:left'></div>
@@ -1812,6 +1835,7 @@ prompt <h2 id="h_sql_text"> List of SQL Text </h2>
 set pagesize 40000
 set markup html on head "" TABLE "class='sql' style='width:100%;'"
 col sql_id entmap off
+col sql_text entmap off
 with snap as
 (
   select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
@@ -1872,7 +1896,7 @@ where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
 select 
   '<div id="'||sql_id||'">'||sql_id||'</div>' sql_id
   --,dbms_lob.substr(sql_text,4000,1) sql_text
-  ,sql_text
+  ,'<pre>'||sql_text||'</pre>' as sql_text
 from dba_hist_sqltext
 where sql_id in (select sql_id from sql_ids)
 order by sql_id;
