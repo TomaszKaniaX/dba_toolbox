@@ -1,7 +1,7 @@
 /*
  * Script for statspack snapshots analysis
  * Run as statspack repository owner, typically "perfstat" user
- * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql
+ * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_trends_charts.sql
  * Author: Tomasz Kania
  * Ver: 0.02
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/ 
@@ -131,7 +131,7 @@ spool &&MAINREPORTFILE
 prompt <html>
 prompt <!-- Statspack reports/graphs -->
 prompt <!-- https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql -->
-prompt <!-- Author: tkania.dba@gmail.com -->
+prompt <!-- Author: Tomasz Kania -->
 prompt <head>
 prompt   <title>&&REPTITLE.</title>
 

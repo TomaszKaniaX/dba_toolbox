@@ -1,7 +1,7 @@
 /*
  * Script for AWR snapshots analysis
  * Run as user with select privileges on DBA_HIST% and V$ views
- * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql
+ * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/awr_trends_charts.sql
  * Author: Tomasz Kania
  * Ver: 0.01 beta
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/
@@ -155,7 +155,7 @@ spool &&MAINREPORTFILE
 prompt <html>
 prompt <!-- Statspack reports/graphs -->
 prompt <!-- https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql -->
-prompt <!-- Author: tkania.dba@gmail.com -->
+prompt <!-- Author: Tomasz Kania -->
 prompt <head>
 prompt   <title>&&REPTITLE.</title>
 
