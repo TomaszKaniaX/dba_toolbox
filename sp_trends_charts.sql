@@ -339,8 +339,8 @@ select snap_id,dbid,instance_number
   ,stat_name
   ,ela_sec
   ,case
-    when lag(stm.value) over (partition by tms.stat_name order by snap_id) >  stm.value then round(stm.value/1000000,2)
-    else round((stm.value-lag(stm.value) over (partition by tms.stat_name order by snap_id))/1000000,2)
+    when lag(stm.value) over (partition by tms.stat_name order by snap_id) >  stm.value then round(stm.value/1000000/60,2)
+    else round((stm.value-lag(stm.value) over (partition by tms.stat_name order by snap_id))/1000000/60,2)
    end sec  
 from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
 join snap using(snap_id,dbid,instance_number)
@@ -406,7 +406,7 @@ prompt            focusTarget: 'category',
 prompt            legend: {position: 'right', textStyle: {fontSize: 12}},
 prompt            tooltip: {textStyle: {fontSize: 11}},
 prompt            hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
-prompt            vAxis: {title: 'Time (seconds)', textStyle: {fontSize: 10}}
+prompt            vAxis: {title: 'Time (minutes)', textStyle: {fontSize: 10}}
 prompt       };;
 prompt 
 prompt     var chart = new google.visualization.AreaChart(document.getElementById('div_time_model_det_chart'));;
@@ -942,14 +942,14 @@ stat_cpu as
 (
 SELECT snap_id,dbid,instance_number
   ,upper(stat_name) stat_name
-  ,round((stm.value-lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id))/1000000,2) sec
+  ,round((stm.value-lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id))/1000000/60,2) cpu_min
 FROM stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
 join snap using(snap_id,dbid,instance_number)
 where upper(stat_name) in('BACKGROUND CPU TIME','DB CPU')
 ),
 stat as
 (
-  select snap_id,dbid,instance_number,wait_class,round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6,2) as time_waited_sec
+  select snap_id,dbid,instance_number,wait_class,round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2) as time_waited_min
   from
   (
     select
@@ -967,7 +967,7 @@ select
 from stat 
 pivot
   (
-    sum(time_waited_sec)
+    sum(time_waited_min)
     for wait_class in
       (
         'Queueing' as "Queueing",
@@ -992,7 +992,7 @@ select *
 from stat_cpu
 pivot
   (
-    max(sec)
+    max(cpu_min)
     for (stat_name) in
     (
       'DB CPU' as "DB CPU",
@@ -1033,7 +1033,7 @@ prompt            focusTarget: 'category',
 prompt            legend: {position: 'right', textStyle: {fontSize: 12}},
 prompt            tooltip: {textStyle: {fontSize: 11}},
 prompt            hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
-prompt            vAxis: {title: 'Time in seconds', textStyle: {fontSize: 10}}
+prompt            vAxis: {title: 'Time in minutes', textStyle: {fontSize: 10}}
 prompt       };;
 prompt 
 prompt       var chart = new google.visualization.AreaChart(document.getElementById('div_wait_class_chart'));;
@@ -1775,7 +1775,7 @@ prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_time_model_det"> Time model system stats (DB Time details) </h2>
 prompt <div id="div_time_model_det_chart" style='width:1200px; height: 400px'></div>
-prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in seconds):</font>
+prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
 prompt <div id="div_time_model_det_tab" style='width:1200px; height: 150px'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
@@ -1797,7 +1797,7 @@ prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_wait_class_time"> Time by wait class </h2>
 prompt <div id="div_wait_class_chart" style='width:1200px; height: 500px'></div>
-prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in seconds):</font>
+prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
 prompt <div id="div_wait_class_tab" style='width:1200px; height: 150px'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
