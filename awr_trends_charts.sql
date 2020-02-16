@@ -16,9 +16,10 @@ set serveroutput on size unlimited
 
 --defines 
 col global_name new_val db_n noprint
-col instance_name new_val inst_n noprint
+col instance_name new_val inst_name noprint
+col instance_number new_val inst_num noprint
 select global_name from global_name;
-select instance_name from v$instance;
+select instance_name,trim(instance_number) as instance_number from v$instance;
 
 col bsnap new_val bsnap noprint
 col esnap new_val esnap noprint
@@ -115,7 +116,7 @@ begin
   ) 
   where 
     end_interval_time >= to_date('&&bdate','&&DT_FMT_REP')
-    and prev_snap is not null 
+    --and prev_snap is not null 
     and next_snap is not null;
 
   select max(snap_id) into v_esnap 
@@ -145,16 +146,25 @@ end;
 
 
 prompt Generating report, it may take few minutes.... Please wait...
+prompt
 set termout off
+
+var stime number
+var etime number
+
+begin
+  :stime := dbms_utility.get_time();
+end;
+/
 
 def REPTITLE="AWR trends report for &&db_n"
 
-def MAINREPORTFILE=awr_trends_&&inst_n._&&bdate._&&edate..html
+def MAINREPORTFILE=awr_trends_&&db_n._&&inst_num._&&bdate._&&edate..html
 spool &&MAINREPORTFILE
 
 prompt <html>
-prompt <!-- Statspack reports/graphs -->
-prompt <!-- https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql -->
+prompt <!-- AWR reports/graphs -->
+prompt <!-- https://github.com/TomaszKaniaX/dba_toolbox/blob/master/awr_trends_charts.sql -->
 prompt <!-- Author: Tomasz Kania -->
 prompt <head>
 prompt   <title>&&REPTITLE.</title>
@@ -179,6 +189,13 @@ prompt       google.charts.setOnLoadCallback(drawWaitClHistChart);;
 prompt       google.charts.setOnLoadCallback(drawTopSQLChart);;
 prompt 
 prompt 
+
+spool off
+set termout on
+prompt Gathering database load statistics...
+set termout off
+spool &&MAINREPORTFILE append
+
 ---------------------------------------------------
 -- DB Load chart
 ---------------------------------------------------
@@ -327,6 +344,11 @@ prompt
 -- DB Load chart end
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering time model statistics...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- Time model details chart
@@ -449,6 +471,11 @@ prompt
 -- Time model details chart end
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering OS load statistics...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- OS Load chart
@@ -556,6 +583,12 @@ prompt
 -- OS load chart end
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering SGA statistics...
+set termout off
+spool &&MAINREPORTFILE append
+
 ---------------------------------------------------
 -- SGA chart
 ---------------------------------------------------
@@ -643,6 +676,12 @@ prompt	}
 ---------------------------------------------------
 -- SGA chart end
 ---------------------------------------------------
+
+spool off
+set termout on
+prompt Gathering database I/O statistics...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- I/O MB/s by func chart
@@ -795,6 +834,12 @@ prompt
 -- I/O MB/s by func chart
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering instance activity statistics...
+set termout off
+spool &&MAINREPORTFILE append
+
 ---------------------------------------------------
 -- Instance activity chart
 ---------------------------------------------------
@@ -926,6 +971,12 @@ prompt
 ---------------------------------------------------
 -- Instance activity chart end
 ---------------------------------------------------
+
+spool off
+set termout on
+prompt Gathering wait events statistics...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- Wait Class chart
@@ -1348,14 +1399,14 @@ prompt            title: 'Top &&nTopEvents wait events (per snapshot)',
 prompt            backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
 prompt            explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
 prompt            titleTextStyle: {fontSize: 16, bold: true},
-prompt            focusTarget: 'category',
+prompt            focusTarget: 'datum',
 prompt            legend: {position: 'right', textStyle: {fontSize: 12}},
 prompt            tooltip: {textStyle: {fontSize: 11}},
 prompt            hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
 prompt            vAxis: {title: 'Time in seconds', textStyle: {fontSize: 10}}
 prompt       };;
 prompt 
-prompt       var chart = new google.visualization.AreaChart(document.getElementById('div_top_events_chart'));;
+prompt       var chart = new google.visualization.ColumnChart(document.getElementById('div_top_events_chart'));;
 prompt       chart.draw(data, options);;
 prompt	}
 prompt
@@ -1455,7 +1506,7 @@ select snap_id,chart_dt,wait_class,event_name,total_waits,time_waited_sec,avg_wa
   from stat join snap using(snap_id,dbid,instance_number) 
 where 
   time_waited_sec is not null
-  and top_n_ev <= &&nTopEvents
+  and top_n_ev <= :nTopEvents
   and restart = 0
 order by snap_id,top_n_ev
 )
@@ -1483,8 +1534,11 @@ prompt
 -- Top wait events end
 ---------------------------------------------------
 
-
-
+spool off
+set termout on
+prompt Gathering wait time histograms...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- Event hist chart 
@@ -1803,6 +1857,11 @@ prompt 	}
 -- Wait class hist chart END
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering top &&nTopSqls SQL statements...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- TOP SQLs chart 
@@ -1960,7 +2019,7 @@ select
   ,max(db_cpu) db_cpu
   ,max(db_time) db_time
 from sdiff join stat_cpu using(snap_id,dbid,instance_number)
-where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
+where top_n_ela <= :nTopSqls or top_n_cpu <= :nTopSqls
 group by rollup(chart_dt,snap_id,sql_id,plan_hash_value,parsing_schema_name,module,action)
 having ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 0 and grouping(module) = 0 and grouping(action) = 0 and grouping(plan_hash_value) = 0 and grouping(parsing_schema_name) = 0)
   or ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 1 )
@@ -2005,14 +2064,14 @@ prompt       ]);;
 prompt
 prompt		var chartView = new google.visualization.DataView(data);;
 prompt		chartView.setRows(chartView.getFilteredRows([{column: 1, value: 'Snap Total:'}]));;
-prompt		chartView.setColumns([0, 8, 13, 19, 21]);;
+prompt		chartView.setColumns([0, 9, 13]);;
 prompt
 prompt       var chart = new google.visualization.ChartWrapper({
 prompt          chartType: 'ColumnChart',
 prompt          containerId: 'div_top_sqls_chart',
 prompt			dataTable: chartView,
 prompt          options: {
-prompt				isStacked:true,
+prompt				isStacked:false,
 prompt				title: 'Top &&nTopSqls SQLs by elapsed/CPU time',
 prompt				backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
 prompt				explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
@@ -2122,7 +2181,7 @@ prompt </head>
 -- BODY
 ---------------------------------------------------
 prompt <body>
-prompt <h1> Statspack report for database: &&db_n., instance: &&inst_n., interval: &&bdate - &&edate </h1>
+prompt <h1> Statspack report for database: &&db_n., instance: &&inst_num., interval: &&bdate - &&edate </h1>
 prompt <h2> Database info </h2>
 set markup html on head "" TABLE "class='sql' style='width:900px;'"
 set pagesize 100
@@ -2265,6 +2324,12 @@ prompt <div id="div_top_sqls_tab" style='width:100%; height:200px;clear:left;'><
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
+spool off
+set termout on
+prompt Gathering top SQL statements text...
+set termout off
+spool &&MAINREPORTFILE append
+
 prompt <h2 id="h_sql_text"> List of SQL Text </h2>
 
 set pagesize 40000
@@ -2326,7 +2391,7 @@ as(
 select
   distinct sql_id
 from sdiff2 
-where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
+where top_n_ela <= :nTopSqls or top_n_cpu <= :nTopSqls
 )
 select 
   '<div id="'||sql_id||'">'||sql_id||'</div>' sql_id
@@ -2347,8 +2412,18 @@ prompt
 
 spool off
 
+begin
+  :etime := dbms_utility.get_time();
+end;
+/
+
+
 set termout on
 prompt ==================================================================
 prompt Generated report: &&MAINREPORTFILE
 prompt ==================================================================
+
+col "Elapsed time" form A15
+select cast(numtodsinterval((:etime-:stime)/100,'SECOND') as interval day(0) to second(0)) as "Elapsed time" from dual;
+
 exit;

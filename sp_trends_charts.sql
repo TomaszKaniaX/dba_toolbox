@@ -16,15 +16,19 @@ set serveroutput on size unlimited
 
 --defines 
 col global_name new_val db_n noprint
-col instance_name new_val inst_n noprint
+col instance_name new_val inst_name noprint
+col instance_number new_val inst_num noprint
 select global_name from global_name;
-select instance_name from v$instance;
+select instance_name,trim(instance_number) as instance_number from v$instance;
 
 col bsnap new_val bsnap noprint
 col esnap new_val esnap noprint
 
 var bsnap number
 var esnap number
+var nTopEvents number
+var nTopSqls number
+
 
 col bdate new_val bdate noprint
 col edate new_val edate noprint
@@ -75,7 +79,15 @@ prompt ==================================================================
 ACCEPT bdate  DEFAULT '&bdate'  PROMPT 'Enter start date as &&DT_FMT_REP [&bdate]: '
 ACCEPT edate  DEFAULT '&edate'  PROMPT 'Enter end date as &&DT_FMT_REP [&edate]: '
 ACCEPT nTopSqls DEFAULT '5'     PROMPT 'Enter number of top SQLs per snapshot [5]: '
+ACCEPT nTopEvents DEFAULT '5'   PROMPT 'Enter number of top Wait events per snapshot [5]: '
 prompt ==================================================================
+
+begin 
+  :nTopSqls := &&nTopSqls ;
+  :nTopEvents := &&nTopEvents ;
+end;
+/  
+
 
 
 declare
@@ -90,7 +102,7 @@ begin
   ) 
   where 
     snap_time >= to_date('&&bdate','&&DT_FMT_REP')
-    and prev_snap is not null 
+    --and prev_snap is not null 
     and next_snap is not null;
 
   select max(snap_id) into v_esnap 
@@ -121,16 +133,26 @@ end;
 
 
 prompt Generating report, it may take few minutes.... Please wait...
+prompt
 set termout off
+
+var stime number
+var etime number
+
+begin
+  :stime := dbms_utility.get_time();
+end;
+/
+
 
 def REPTITLE="Statspack trends report for &&db_n"
 
-def MAINREPORTFILE=sp_trends_&&inst_n._&&bdate._&&edate..html
+def MAINREPORTFILE=sp_trends_&&db_n._&&inst_num._&&bdate._&&edate..html
 spool &&MAINREPORTFILE
 
 prompt <html>
 prompt <!-- Statspack reports/graphs -->
-prompt <!-- https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_perf.sql -->
+prompt <!-- https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_trends_charts.sql -->
 prompt <!-- Author: Tomasz Kania -->
 prompt <head>
 prompt   <title>&&REPTITLE.</title>
@@ -148,11 +170,19 @@ prompt       google.charts.setOnLoadCallback(drawSGAChart);;
 prompt       google.charts.setOnLoadCallback(drawIOMBSFuncChart);; 
 prompt       google.charts.setOnLoadCallback(drawInstActChart);;
 prompt       google.charts.setOnLoadCallback(drawWClassChart);;
+prompt       google.charts.setOnLoadCallback(drawTopWaitsChart);;
+prompt       google.charts.setOnLoadCallback(drawTopWaitsTab);;
 prompt       google.charts.setOnLoadCallback(drawWaitEvHistChart);;
 prompt       google.charts.setOnLoadCallback(drawWaitClHistChart);;
 prompt       google.charts.setOnLoadCallback(drawTopSQLChart);;
 prompt 
 prompt 
+
+spool off
+set termout on
+prompt Gathering database load statistics...
+set termout off
+spool &&MAINREPORTFILE append
 ---------------------------------------------------
 -- DB Load chart
 ---------------------------------------------------
@@ -299,6 +329,11 @@ prompt
 -- DB Load chart end
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering time model statistics...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- Time model details chart
@@ -419,6 +454,11 @@ prompt
 -- Time model details chart end
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering OS load statistics...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- OS Load chart
@@ -530,6 +570,11 @@ prompt
 -- OS load chart end
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering SGA statistics...
+set termout off
+spool &&MAINREPORTFILE append
 ---------------------------------------------------
 -- SGA chart
 ---------------------------------------------------
@@ -619,6 +664,11 @@ prompt	}
 -- SGA chart end
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering database I/O statistics...
+set termout off
+spool &&MAINREPORTFILE append
 ---------------------------------------------------
 -- I/O MB/s by func chart
 ---------------------------------------------------
@@ -770,6 +820,12 @@ prompt
 -- I/O MB/s by func chart
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering instance activity statistics...
+set termout off
+spool &&MAINREPORTFILE append
+
 ---------------------------------------------------
 -- Instance activity chart
 ---------------------------------------------------
@@ -902,6 +958,13 @@ prompt
 ---------------------------------------------------
 -- Instance activity chart end
 ---------------------------------------------------
+
+
+spool off
+set termout on
+prompt Gathering wait events statistics...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- Wait Class chart
@@ -1046,6 +1109,422 @@ prompt
 ---------------------------------------------------
 -- Wait Class chart end
 ---------------------------------------------------
+
+
+
+---------------------------------------------------
+-- Top wait events chart
+---------------------------------------------------
+prompt     function drawTopWaitsChart() {
+prompt       var data = new google.visualization.DataTable();;
+prompt       data.addColumn('datetime', 'Snapshot');;
+
+declare
+  type t_str_tab is table of varchar2(64);
+  v_events t_str_tab;
+  v_sqlstmt   varchar2(8000);
+  v_pivot     varchar2(4000);
+  v_dyn_cols  varchar2(4000);
+  v_gchart_cols   varchar2(4000);
+  v_cid           number;
+  t_desctab      dbms_sql.desc_tab;
+  v_colcnt       number;
+  v_colval       varchar2(4000);
+  v_rowcnt       number;
+  v_gchart_data  varchar2(4000);
+
+  cursor c_events is
+    with snap as
+    (
+      select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
+        ,snap_time
+        --,row_number() over (order by snap_id desc) rn
+        ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
+        ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
+        ,startup_time,snapshot_exec_time_s
+        ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
+      from stats$snapshot
+      where snap_id between :bsnap and :esnap
+        and dbid = (select dbid from v$database)
+        and instance_number = (select instance_number from v$instance)
+    ),
+    stat_cpu as
+    (
+    select * from
+    (
+      select snap_id,dbid,instance_number
+        ,upper(stat_name) stat_name
+        ,value-lag(value) over (partition by startup_time,stat_name order by snap_id) as time_
+      from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+      join snap using(snap_id,dbid,instance_number)
+      where stat_name in('DB time','DB CPU','background cpu time','background elapsed time')
+    ) pivot (
+        max(time_) for stat_name in
+          (
+            'DB TIME' as db_time,
+            'DB CPU' as db_cpu,
+            'BACKGROUND CPU TIME' as backgr_cpu,
+            'BACKGROUND ELAPSED TIME' as backgr_ela
+          )
+      )
+    ),
+    stat as
+    (
+      select
+        snap_id,dbid,instance_number
+        ,wait_class
+        ,event_name
+        ,total_waits
+        ,round(time_waited_micro/1e6,2) time_waited_sec
+        ,avg_wait_time_ms
+        ,row_number() over (partition by snap_id order by time_waited_micro desc) top_n_ev
+        ,round(time_waited_micro/(db_time+backgr_ela)*100,2) pct_of_db_time
+      from
+      (
+      select
+        snap_id,dbid,instance_number
+        ,event as event_name
+        ,wait_class
+        ,total_waits-lag(total_waits) over(partition by event order by snap_id) as total_waits
+        ,time_waited_micro-lag(time_waited_micro) over(partition by event order by snap_id) as time_waited_micro
+        ,case
+          when total_waits-lag(total_waits) over(partition by event order by snap_id) = 0
+            then 0
+            else
+              round((time_waited_micro-lag(time_waited_micro) over(partition by event order by snap_id))
+              /(total_waits-lag(total_waits) over(partition by event order by snap_id))/1000,2)
+        end avg_wait_time_ms
+      from stats$system_event se join v$event_name e using (event_id)
+        join snap using(snap_id,dbid,instance_number)
+      where wait_class <> 'Idle'
+      union all
+      select snap_id,dbid,instance_number,'DB CPU' as event_name,null as wait_class,null,db_cpu+backgr_cpu,null from stat_cpu join snap using(snap_id,dbid,instance_number)
+      )
+      join stat_cpu using(snap_id,dbid,instance_number)
+    ),chart_data as
+    (
+    select snap_id,chart_dt,wait_class,event_name,total_waits,time_waited_sec,avg_wait_time_ms,pct_of_db_time,row_number() over(order by snap_id,top_n_ev) grn
+      from stat join snap using(snap_id,dbid,instance_number)
+    where
+      time_waited_sec is not null
+      and top_n_ev <= :nTopEvents
+      and restart = 0
+    order by snap_id,top_n_ev
+    )
+    select distinct event_name
+    from chart_data
+    ;
+begin
+  open c_events;
+  fetch c_events bulk collect into v_events;
+  close c_events;
+  for i in 1..v_events.count
+    loop
+      v_pivot := v_pivot||''''||v_events(i)||''' as "'||substr(v_events(i),1,30)||'",';
+      v_dyn_cols := v_dyn_cols||'"'||substr(v_events(i),1,30)||'",';
+      --Dbms_Output.Put_Line('event: '||v_events(i));
+      v_gchart_cols := v_gchart_cols||'data.addColumn(''number'', '''||v_events(i)||''');;'||chr(10);
+    end loop;
+  v_pivot := replace(rtrim(v_pivot,','),chr(38),'and');
+  v_dyn_cols := replace(rtrim(v_dyn_cols,','),chr(38),'and');
+  --dbms_output.put_line(v_pivot);
+  --dbms_output.put_line(v_dyn_cols);
+  dbms_output.put_line(v_gchart_cols);
+  dbms_output.put_line('');
+  dbms_output.put_line('data.addRows([');
+
+  v_sqlstmt := q'[    with snap as
+    (
+      select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
+        ,snap_time
+        ,row_number() over (order by snap_id desc) rn
+        ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
+        ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
+        ,startup_time,snapshot_exec_time_s
+        ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
+      from stats$snapshot
+      where snap_id between :bsnap and :esnap
+      and dbid = (select dbid from v$database)
+      and instance_number = (select instance_number from v$instance)
+    ),
+    stat_cpu as
+    (
+    select * from
+    (
+      select snap_id,dbid,instance_number
+        ,upper(stat_name) stat_name
+        ,value-lag(value) over (partition by startup_time,stat_name order by snap_id) as time_
+      from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+      join snap using(snap_id,dbid,instance_number)
+      where stat_name in('DB time','DB CPU','background cpu time','background elapsed time')
+    ) pivot (
+        max(time_) for stat_name in
+          (
+            'DB TIME' as db_time,
+            'DB CPU' as db_cpu,
+            'BACKGROUND CPU TIME' as backgr_cpu,
+            'BACKGROUND ELAPSED TIME' as backgr_ela
+          )
+      )
+    ),
+    stat as
+    (
+      select
+        snap_id,dbid,instance_number
+        ,wait_class
+        ,event_name
+        ,total_waits
+        ,round(time_waited_micro/1e6,2) time_waited_sec
+        ,avg_wait_time_ms
+        ,row_number() over (partition by snap_id order by time_waited_micro desc) top_n_ev
+        ,round(time_waited_micro/(db_time+backgr_ela)*100,2) pct_of_db_time
+      from
+      (
+      select
+        snap_id,dbid,instance_number
+        ,event as event_name
+        ,wait_class
+        ,total_waits-lag(total_waits) over(partition by event order by snap_id) as total_waits
+        ,time_waited_micro-lag(time_waited_micro) over(partition by event order by snap_id) as time_waited_micro
+        ,case
+          when total_waits-lag(total_waits) over(partition by event order by snap_id) = 0
+            then 0
+            else
+              round((time_waited_micro-lag(time_waited_micro) over(partition by event order by snap_id))
+              /(total_waits-lag(total_waits) over(partition by event order by snap_id))/1000,2)
+        end avg_wait_time_ms
+      from stats$system_event se join v$event_name e using (event_id)
+        join snap using(snap_id,dbid,instance_number)
+      where wait_class <> 'Idle'
+      union all
+      select snap_id,dbid,instance_number,'DB CPU' as event_name,null as wait_class,null,db_cpu+backgr_cpu,null from stat_cpu join snap using(snap_id,dbid,instance_number)
+      )
+      join stat_cpu using(snap_id,dbid,instance_number)
+    ),chart_data as
+    (
+    select chart_dt,rn,event_name,time_waited_sec
+      from stat join snap using(snap_id,dbid,instance_number)
+    where
+      time_waited_sec is not null
+      and top_n_ev <= :nTopEvents
+      and restart = 0
+    order by snap_id,top_n_ev
+    )
+    select chart_dt,rn,]'||v_dyn_cols||q'[
+    from chart_data
+    pivot (max(time_waited_sec) for event_name in(]'||v_pivot||'))
+    order by rn desc';
+
+    --Dbms_Output.Put_Line(v_sqlstmt);
+    v_cid := dbms_sql.open_cursor;
+
+    dbms_sql.parse(
+        v_cid,
+        v_sqlstmt,
+        dbms_sql.native
+    );
+
+    dbms_sql.bind_variable(v_cid, 'bsnap', :bsnap);
+    dbms_sql.bind_variable(v_cid, 'esnap', :esnap);
+    dbms_sql.bind_variable(v_cid, 'nTopEvents', :nTopEvents);
+
+    dbms_sql.describe_columns(
+        v_cid,
+        v_colcnt,
+        t_desctab
+    );
+    for i in 1..v_colcnt loop
+      dbms_sql.define_column(
+          v_cid,
+          i,
+          v_colval,
+          4000
+        );
+    end loop;
+
+    v_rowcnt := dbms_sql.execute(v_cid);
+
+    v_gchart_data := '';
+    while ( dbms_sql.fetch_rows(v_cid) > 0 ) loop
+      for i in 1..v_colcnt loop
+        dbms_sql.column_value(
+          v_cid,
+          i,
+          v_colval
+        );
+        --dbms_output.put_line(rpad(t_desctab(i).col_name,30)||': '|| v_colval);
+        if t_desctab(i).col_name = 'CHART_DT' then
+          v_gchart_data := v_gchart_data||'[new Date('||v_colval||')';
+        elsif t_desctab(i).col_name = 'RN' then
+          null;
+        else
+          v_gchart_data := v_gchart_data||','||nvl(v_colval,0);
+        end if;
+      end loop;
+      v_gchart_data :=  v_gchart_data||']';
+      Dbms_Output.Put_Line(v_gchart_data);
+      v_gchart_data := ',';
+
+    end loop;
+
+    dbms_sql.close_cursor(v_cid);
+exception
+  when others then
+  if dbms_sql.is_open(v_cid) then
+    dbms_sql.close_cursor(v_cid);
+  end if;
+  raise;
+end;
+/
+
+
+prompt       ]);;
+prompt 
+prompt       var options = {
+prompt            isStacked: true,
+prompt            title: 'Top &&nTopEvents wait events (per snapshot)',
+prompt            backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
+prompt            explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
+prompt            titleTextStyle: {fontSize: 16, bold: true},
+prompt            focusTarget: 'datum',
+prompt            legend: {position: 'right', textStyle: {fontSize: 12}},
+prompt            tooltip: {textStyle: {fontSize: 11}},
+prompt            hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
+prompt            vAxis: {title: 'Time in seconds', textStyle: {fontSize: 10}}
+prompt       };;
+prompt 
+prompt       var chart = new google.visualization.ColumnChart(document.getElementById('div_top_events_chart'));;
+prompt       chart.draw(data, options);;
+prompt	}
+prompt
+
+---------------------------------------------------
+-- Top wait events chart end
+---------------------------------------------------
+
+
+
+
+---------------------------------------------------
+-- Top wait events tab
+---------------------------------------------------
+prompt     function drawTopWaitsTab() {
+prompt       var data = new google.visualization.DataTable();;
+prompt       data.addColumn('datetime', 'Snapshot');;
+prompt       data.addColumn('string', 'Wait class');;
+prompt       data.addColumn('string', 'Event');;
+prompt       data.addColumn('number', 'Total waits');;
+prompt       data.addColumn('number', 'Wait time (sec)');;
+prompt       data.addColumn('number', 'Avg. wait (ms)');;
+prompt       data.addColumn('number', '% DB time');;
+prompt 
+prompt       data.addRows([
+with snap as
+(
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
+    ,snap_time
+    --,row_number() over (order by snap_id desc) rn
+    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
+    ,startup_time,snapshot_exec_time_s
+    ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
+  from stats$snapshot
+  where snap_id between :bsnap and :esnap
+  and dbid = (select dbid from v$database)
+  and instance_number = (select instance_number from v$instance)
+),
+stat_cpu as(
+select * from 
+(
+  select snap_id,dbid,instance_number
+    ,upper(stat_name) stat_name
+    ,stm.value-lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id) time_
+  from stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+  join snap using(snap_id,dbid,instance_number)
+  where stat_name in('DB time','DB CPU','background cpu time','background elapsed time')
+)  pivot (
+    max(time_) for stat_name in
+      (
+        'DB TIME' as db_time,
+        'DB CPU' as db_cpu,
+        'BACKGROUND CPU TIME' as backgr_cpu,
+        'BACKGROUND ELAPSED TIME' as backgr_ela
+      )
+  )
+),
+stat as
+(
+  select
+    snap_id,dbid,instance_number
+    ,wait_class
+    ,event_name
+    ,total_waits
+    ,round(time_waited_micro/1e6,2) time_waited_sec
+    ,avg_wait_time_ms
+    ,row_number() over (partition by snap_id order by time_waited_micro desc) top_n_ev
+    ,round(time_waited_micro/(db_time+backgr_ela)*100,2) pct_of_db_time
+  from
+  (
+  select
+    snap_id,dbid,instance_number
+    ,event as event_name
+    ,wait_class
+    ,total_waits-lag(total_waits) over(partition by event order by snap_id) as total_waits
+    ,time_waited_micro-lag(time_waited_micro) over(partition by event order by snap_id) as time_waited_micro
+    ,case
+      when total_waits-lag(total_waits) over(partition by event order by snap_id) = 0
+        then 0
+        else
+          round((time_waited_micro-lag(time_waited_micro) over(partition by event order by snap_id))
+          /(total_waits-lag(total_waits) over(partition by event order by snap_id))/1000,2)
+     end avg_wait_time_ms
+  from stats$system_event se join v$event_name e using (event_id)
+    join snap using(snap_id,dbid,instance_number)
+  where wait_class <> 'Idle'
+  union all
+  select snap_id,dbid,instance_number,'DB CPU' as event_name,null as wait_class,null,db_cpu+backgr_cpu,null from stat_cpu join snap using(snap_id,dbid,instance_number)
+  )
+  join stat_cpu using(snap_id,dbid,instance_number)
+),chart_data as
+(
+select snap_id,chart_dt,wait_class,event_name,total_waits,time_waited_sec,avg_wait_time_ms,pct_of_db_time,row_number() over(order by snap_id,top_n_ev) grn 
+  from stat join snap using(snap_id,dbid,instance_number) 
+where 
+  time_waited_sec is not null
+  and top_n_ev <= :nTopEvents
+  and restart = 0
+order by snap_id,top_n_ev
+)
+select 
+  decode(grn,1,'',',')||
+    '[new Date('||chart_dt||'),'||
+  ''''||wait_class||''','||
+  ''''||event_name||''','||
+  total_waits||','||
+  time_waited_sec||','||  
+  avg_wait_time_ms||','||
+  pct_of_db_time
+  ||']' 
+from chart_data;
+
+
+prompt       ]);;
+prompt 
+prompt       var table = new google.visualization.Table(document.getElementById('div_top_events_tab'));;
+prompt       table.draw(data, {width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}});;
+prompt	}
+prompt
+
+---------------------------------------------------
+-- Top wait events end
+---------------------------------------------------
+
+spool off
+set termout on
+prompt Gathering wait time histograms...
+set termout off
+spool &&MAINREPORTFILE append
+
 ---------------------------------------------------
 -- Event hist chart 
 ---------------------------------------------------
@@ -1364,6 +1843,11 @@ prompt 	}
 -- Wait class hist chart END
 ---------------------------------------------------
 
+spool off
+set termout on
+prompt Gathering top &&nTopSqls SQL statements...
+set termout off
+spool &&MAINREPORTFILE append
 
 ---------------------------------------------------
 -- TOP SQLs chart 
@@ -1561,7 +2045,7 @@ select
   ,max(db_cpu) db_cpu
   ,max(db_time) db_time
 from sdiff2 join stat_cpu using(snap_id,dbid,instance_number)
-where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
+where top_n_ela <= :nTopSqls or top_n_cpu <= :nTopSqls
 group by rollup(chart_dt,snap_id,sql_id,module)
 having ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 0 and grouping(module) = 0 )
   or ( grouping(chart_dt) = 0 and grouping(snap_id) = 0 and grouping(sql_id) = 1 )
@@ -1598,20 +2082,17 @@ from chart_data;
 
 
 prompt       ]);;
-
-
-
 prompt
 prompt		var chartView = new google.visualization.DataView(data);;
 prompt		chartView.setRows(chartView.getFilteredRows([{column: 1, value: 'Snap Total:'}]));;
-prompt		chartView.setColumns([0, 6, 10, 16, 18]);;
+prompt		chartView.setColumns([0, 6, 10]);;
 prompt
 prompt       var chart = new google.visualization.ChartWrapper({
 prompt          chartType: 'ColumnChart',
 prompt          containerId: 'div_top_sqls_chart',
 prompt			dataTable: chartView,
 prompt          options: {
-prompt				isStacked:true,
+prompt				isStacked:false,
 prompt				title: 'Top &&nTopSqls SQLs by elapsed/CPU time',
 prompt				backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
 prompt				explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
@@ -1721,7 +2202,7 @@ prompt </head>
 -- BODY
 ---------------------------------------------------
 prompt <body>
-prompt <h1> Statspack report for database: &&db_n., instance: &&inst_n., interval: &&bdate - &&edate </h1>
+prompt <h1> Statspack report for database: &&db_n., instance: &&inst_num., interval: &&bdate - &&edate </h1>
 prompt <h2> Database info </h2>
 set markup html on head "" TABLE "class='sql' style='width:900px;'"
 set pagesize 100
@@ -1755,6 +2236,7 @@ prompt  <li><a class="toc" href="#h_time_model_det">Time model system stats (DB 
 prompt  <li><a class="toc" href="#h_os_load">OS Load</a></li> 
 prompt  <li><a class="toc" href="#h_instance_activity">Instance activity</a></li> 
 prompt  <li><a class="toc" href="#h_wait_class_time">Time waited (by wait class)</a></li> 
+prompt  <li><a class="toc" href="#h_top_events">Top &&nTopEvents wait events</a></li> 
 prompt  <li><a class="toc" href="#h_wait_class_hist">Wait class histograms</a></li> 
 prompt  <li><a class="toc" href="#h_io_wait_ev_hist">IO wait events histograms</a></li> 
 prompt  <li><a class="toc" href="#h_sga_stat">SGA pool sizes</a></li> 
@@ -1800,6 +2282,13 @@ prompt <div id="div_wait_class_chart" style='width:1200px; height: 500px'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
 prompt <div id="div_wait_class_tab" style='width:1200px; height: 150px'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
+
+prompt <h2 id="h_top_events"> Top &&nTopEvents wait events </h2>
+prompt <div id="div_top_events_chart" style='width:1200px; height: 650px'></div>
+prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in seconds):</font>
+prompt <div id="div_top_events_tab" style='width:1200px; height: 250px'></div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
+
 
 prompt <h2 id="h_wait_class_hist"> Wait class histograms (percent of total waits) </h2>
 prompt <div id="div_wclass_hist">
@@ -1857,6 +2346,12 @@ prompt </div>
 prompt <div id="div_top_sqls_tab" style='width:100%; height:150px;clear:left;'></div>
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
+
+spool off
+set termout on
+prompt Gathering top SQL statements text...
+set termout off
+spool &&MAINREPORTFILE append
 
 prompt <h2 id="h_sql_text"> List of SQL Text </h2>
 prompt <ul>
@@ -1946,7 +2441,7 @@ as(
 select
   distinct sql_id
 from sdiff2 
-where top_n_ela <= &&nTopSqls or top_n_cpu <= &&nTopSqls
+where top_n_ela <= :nTopSqls or top_n_cpu <= :nTopSqls
 )
 select 
 	'<div id="'||sql_id||'">'||sql_id||'</div>' sql_id
@@ -1966,8 +2461,18 @@ prompt
 
 spool off
 
+begin
+  :etime := dbms_utility.get_time();
+end;
+/
+
+
 set termout on
 prompt ==================================================================
 prompt Generated report: &&MAINREPORTFILE
 prompt ==================================================================
+
+col "Elapsed time" form A15
+select cast(numtodsinterval((:etime-:stime)/100,'SECOND') as interval day(0) to second(0)) as "Elapsed time" from dual;
+
 exit;
