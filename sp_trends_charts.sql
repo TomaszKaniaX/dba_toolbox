@@ -13,6 +13,7 @@ set trimspool on echo off feedback off
 set verify off
 set define '&'
 set serveroutput on size unlimited
+set sqlblanklines on
 
 --defines 
 col global_name new_val db_n noprint
@@ -20,6 +21,9 @@ col instance_name new_val inst_name noprint
 col instance_number new_val inst_num noprint
 select global_name from global_name;
 select instance_name,trim(instance_number) as instance_number from v$instance;
+
+--avoid comma as decimal separator in outputs
+alter session set nls_numeric_characters='.,';
 
 col bsnap new_val bsnap noprint
 col esnap new_val esnap noprint
@@ -131,6 +135,7 @@ begin
 end;
 /
 
+whenever sqlerror continue
 
 prompt Generating report, it may take few minutes.... Please wait...
 prompt
@@ -754,7 +759,7 @@ select
     ,round((small_read_megabytes+small_write_megabytes+large_read_megabytes+large_write_megabytes)/ela_sec,2) mbs
     --,small_read_reqs+ small_write_reqs+ large_read_reqs+ large_write_reqs
 from iostat
-where small_read_megabytes is not null
+where small_read_megabytes is not null and ela_sec <> 0
 )
 select 
 --  chart_dt,arch, archive_manager, buf_cache_reads, dbwr, data_pump, direct_reads, direct_writes, lgwr, others, rman, recovery, smart_scan, streams_aq, xdb
@@ -867,7 +872,8 @@ select
   end/ela_sec,2) value_per_sec
   ,row_number() over(order by snap_id desc,name desc) rn
 from stats$sysstat st join snap  using(snap_id, dbid, instance_number)
-where name in
+where ela_sec <> 0 and
+  name in
   (
     'user commits'
     ,'user rollbacks'
@@ -1220,8 +1226,8 @@ begin
   close c_events;
   for i in 1..v_events.count
     loop
-      v_pivot := v_pivot||''''||v_events(i)||''' as "'||substr(v_events(i),1,30)||'",';
-      v_dyn_cols := v_dyn_cols||'"'||substr(v_events(i),1,30)||'",';
+      v_pivot := v_pivot||''''||v_events(i)||''' as "'||substr(v_events(i),1,25)||'",';
+      v_dyn_cols := v_dyn_cols||'"'||substr(v_events(i),1,25)||'",';
       --Dbms_Output.Put_Line('event: '||v_events(i));
       v_gchart_cols := v_gchart_cols||'data.addColumn(''number'', '''||v_events(i)||''');;'||chr(10);
     end loop;
@@ -1892,7 +1898,7 @@ with snap as
   from stats$snapshot
   where snap_id between :bsnap and :esnap
   and dbid = (select dbid from v$database)
-  and instance_number = (select instance_number from v$instance)
+  and instance_number = (select instance_number from v$instance)  
 ),
 stat_cpu as
 (
@@ -2060,11 +2066,11 @@ select
   gets||','||
   decode(sql_id,'Snap Total:',0,gets_exec)||','||
   cpu_sec||','||
-  round(cpu_sec/db_cpu,4)*100 ||','||
+  round(cpu_sec/decode(db_cpu,0,0.000001,db_cpu),4)*100 ||','||
   db_cpu||','||
   decode(sql_id,'Snap Total:',0,cpu_sec_exec)||','||
   ela_sec||','||
-  round(ela_sec/db_time,4)*100 ||','||
+  round(ela_sec/decode(db_time,0,0.00001,db_time),4)*100 ||','||
   db_time||','||
   decode(sql_id,'Snap Total:',0,ela_sec_exec)||','||
   user_io_sec||','||
@@ -2467,6 +2473,17 @@ end;
 /
 
 
+col host_grep_cmd new_val host_grep_cmd noprint
+select 
+  case 
+    when upper('&&_EDITOR') = 'NOTEPAD' then
+      'findstr "^ORA- ^PLS- ^SP2-"'
+    else
+      'grep -E "^ORA-|^PLS-|^SP2-"'
+  end host_grep_cmd
+from dual;
+
+
 set termout on
 prompt ==================================================================
 prompt Generated report: &&MAINREPORTFILE
@@ -2474,5 +2491,11 @@ prompt ==================================================================
 
 col "Elapsed time" form A15
 select cast(numtodsinterval((:etime-:stime)/100,'SECOND') as interval day(0) to second(0)) as "Elapsed time" from dual;
+
+prompt ==================================================================
+prompt  Checking for errors in generated report...
+prompt  If anything is reported below, charts will not display properly...
+prompt ==================================================================
+host &&host_grep_cmd &&MAINREPORTFILE
 
 exit;
