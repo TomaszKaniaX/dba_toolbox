@@ -3,7 +3,7 @@
  * Run as user with select privileges on DBA_HIST% and V$ views
  * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/awr_trends_charts.sql
  * Author: Tomasz Kania
- * Ver: 0.01 beta
+ * Ver: 0.03
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/
 */
 

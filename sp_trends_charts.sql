@@ -3,7 +3,7 @@
  * Run as statspack repository owner, typically "perfstat" user
  * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_trends_charts.sql
  * Author: Tomasz Kania
- * Ver: 0.02
+ * Ver: 0.03
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/ 
 */
 
