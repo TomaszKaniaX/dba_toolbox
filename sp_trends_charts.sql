@@ -2159,10 +2159,18 @@ prompt
 prompt      google.visualization.events.addListener(chart, 'select', selectBarSnapHandler);;
 prompt      
 prompt      function selectBarSnapHandler() {
-prompt        var selection = chart.getChart().getSelection();;
-prompt        var selDate = chartView.getFormattedValue(selection[0].row, 0);;
-prompt        snap_filter.setState({'value': selDate});;
-prompt        snap_filter.draw();;
+prompt      var selection = chart.getChart().getSelection();;
+prompt      if (selection) {
+prompt          try {
+prompt            var selDate = chartView.getFormattedValue(selection[0].row, 0);
+prompt            snap_filter.setState({'value': selDate});;
+prompt            snap_filter.draw();;
+prompt          }
+prompt          catch(err){
+prompt            snap_filter.setState({'value': null});;
+prompt            snap_filter.draw();;
+prompt          }
+prompt        }
 prompt      }
 prompt      
 prompt      resetFilters = function() {
