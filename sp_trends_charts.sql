@@ -2195,7 +2195,7 @@ prompt   table.sql {font-size:8pt; color:#333366; width:70%; border-width: 2px; 
 prompt   th {border-width: 1px; background-color:#d9d9d9; padding: 3px; border-style: solid; border-color: #000000;} 
 prompt   tr:nth-child(even) {background: #f2f2f2}
 prompt   tr:nth-child(odd) {background: #FFFFFF}
-prompt   tr:hover {color:black; background:#85d0fe;}
+prompt   tr:hover {color:black; background:#e6f2ff;}
 prompt   td {border-width: 1px; padding: 2px; border-style: solid; border-color: #000000; color:#000000;} 
 prompt   th.gcharttab {font-size:8pt;font-weight:bold; background: linear-gradient(to top, #9494b8 0%, #c2c2d6 100%);}
 prompt   td.gcharttab {font-size:8pt;}
@@ -2209,6 +2209,8 @@ prompt   a.toc:link, a.toc:visited {font-size:10pt; font-weight:bold; text-decor
 prompt   a.toc:hover {font-size:10pt; font-weight:bold; text-decoration:underline; color:#333366; background-color:#eeeef6}
 prompt   a.fnnav:link, a.fnnav:visited {font-size:8pt; font-weight:bold; text-decoration:none; color:#333366;font-style:italic;}
 prompt   a.fnnav:hover {font-size:8pt; font-weight:bold; text-decoration:underline; color:#333366; background-color:#eeeef6;font-style:italic;}
+prompt   div.tab1200 {width:1200px; resize: vertical; overflow:auto;}
+prompt   div.tab100pct {width:100%; resize: vertical; overflow:auto;}
 prompt   .google-visualization-table-table *  { font-size:8pt; }
 prompt </style>
 prompt </head>
@@ -2262,68 +2264,67 @@ prompt </ul>
 
 prompt <h2 id="h_time_model_stats"> Time model system stats </h2>
 prompt <div id="div_time_model">
-prompt 	<div id="div_time_model_filter" style='width:1200px;padding:10px'></div>
-prompt 	<div id="div_time_model_chart" style='width:1200px; height: 400px'></div>
+prompt 	<div id="div_time_model_filter" style='width:1200px;padding:10px;'></div>
+prompt 	<div id="div_time_model_chart" style='width:1200px; height: 400px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
-prompt 	<div id="div_time_model_tab" style='width:1200px; height: 150px'></div>	
+prompt 	<div id="div_time_model_tab" class="tab1200" style='height: 150px;'></div>	
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_time_model_det"> Time model system stats (DB Time details) </h2>
-prompt <div id="div_time_model_det_chart" style='width:1200px; height: 400px'></div>
+prompt <div id="div_time_model_det_chart" style='width:1200px; height: 400px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
-prompt <div id="div_time_model_det_tab" style='width:1200px; height: 150px'></div>
+prompt <div id="div_time_model_det_tab" class="tab1200" style='height: 150px;'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_os_load"> OS load </h2>
-prompt <div id="div_os_load_chart" style='width:1200px; height: 400px'></div>
+prompt <div id="div_os_load_chart" style='width:1200px; height: 400px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
-prompt <div id="div_os_load_tab" style='width:1200px; height: 150px'></div>
+prompt <div id="div_os_load_tab" class="tab1200" style='height: 150px;'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_instance_activity"> Instance activity (load profile) </h2>
 prompt <div id="div_inst_activ">
-prompt 	<div id="div_inst_activ_filter" style='width:1200px;padding:10px'></div>
-prompt 	<div id="div_inst_activ_chart" style='width:1200px; height: 450px'></div>
+prompt 	<div id="div_inst_activ_filter" style='width:1200px;padding:10px;'></div>
+prompt 	<div id="div_inst_activ_chart" style='width:1200px; height: 450px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
-prompt 	<div id="div_inst_activ_tab" style='width:1200px; height: 150px'></div>	
+prompt 	<div id="div_inst_activ_tab" class="tab1200" style='height: 150px;'></div>	
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 
 prompt <h2 id="h_wait_class_time"> Time by wait class </h2>
-prompt <div id="div_wait_class_chart" style='width:1200px; height: 500px'></div>
+prompt <div id="div_wait_class_chart" style='width:1200px; height: 500px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
-prompt <div id="div_wait_class_tab" style='width:1200px; height: 150px'></div>
+prompt <div id="div_wait_class_tab" class="tab1200" style='height: 150px;'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_top_events"> Top &&nTopEvents wait events </h2>
-prompt <div id="div_top_events_chart" style='width:1200px; height: 650px'></div>
+prompt <div id="div_top_events_chart" style='width:1200px; height: 650px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in seconds):</font>
-prompt <div id="div_top_events_tab" style='width:1200px; height: 250px'></div>
+prompt <div id="div_top_events_tab" class="tab1200" style='height: 250px;'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
-
 
 prompt <h2 id="h_wait_class_hist"> Wait class histograms (percent of total waits) </h2>
 prompt <div id="div_wclass_hist">
-prompt 	<div id="div_wclass_hist_filter" style='width:1200px;padding:10px'></div>
-prompt 	<div id="div_wclass_hist_chart" style='width:1200px; height: 500px'></div>
-prompt 	<div id="div_wclass_hist_tab" style='width:1200px; height: 150px'></div>	
+prompt 	<div id="div_wclass_hist_filter" style='width:1200px;padding:10px;'></div>
+prompt 	<div id="div_wclass_hist_chart" style='width:1200px; height: 500px;'></div>
+prompt 	<div id="div_wclass_hist_tab" class="tab1200" style='height: 150px;'></div>	
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_io_wait_ev_hist"> Wait events (I/O related) histograms (percent of total waits) </h2>
 prompt <div id="div_event_hist">
-prompt 	<div id="div_event_hist_filter" style='width:1200px;padding:10px'></div>
-prompt 	<div id="div_event_hist_chart" style='width:1200px; height: 500px'></div>
-prompt 	<div id="div_event_hist_tab" style='width:1200px; height: 150px'></div>	
+prompt 	<div id="div_event_hist_filter" style='width:1200px;padding:10px;'></div>
+prompt 	<div id="div_event_hist_chart" style='width:1200px; height: 500px;'></div>
+prompt 	<div id="div_event_hist_tab" class="tab1200" style='height: 150px;'></div>	
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_sga_stat"> SGA stat </h2>
-prompt <div id="div_sga_chart" style='width:1200px; height: 400px'></div>
+prompt <div id="div_sga_chart" style='width:1200px; height: 400px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below:</font>
-prompt <div id="div_sga_tab" style='width:1200px; height: 150px'></div>
+prompt <div id="div_sga_tab" class="tab1200" style='height: 150px;'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 prompt <h2 id="h_iombs_func"> I/O MB/s by I/O function  </h2>
@@ -2357,7 +2358,7 @@ prompt 		  sqlid_filter.draw();
 prompt 		}
 prompt     </script>
 prompt </div>
-prompt <div id="div_top_sqls_tab" style='width:100%; height:150px;clear:left;'></div>
+prompt <div id="div_top_sqls_tab" class="tab100pct" style='height:150px;clear:left;'></div>
 prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
