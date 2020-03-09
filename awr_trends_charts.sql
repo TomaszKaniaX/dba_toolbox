@@ -75,7 +75,7 @@ declare
 begin
   select count(*),min(end_interval_time), max(end_interval_time) into v_nSnaps,v_OldestSnap,v_NewestSnap from dba_hist_snapshot;  
   if v_nSnaps < 8 then
-    raise_application_error(-20001,'Insufficient data in statspack repository. '||to_char(v_nSnaps)||' snapshosts available, at least 8 snapsthots are required');
+    raise_application_error(-20001,'Insufficient data in AWR repository. '||to_char(v_nSnaps)||' snapshosts available, at least 8 snapsthots are required');
   else
     select 
       greatest(trunc(sysdate)-3,min(end_interval_time)),
@@ -140,7 +140,7 @@ begin
   if v_nSnaps < 7 then
     Dbms_Output.Put_Line('bsnap:'||v_bsnap);
     Dbms_Output.Put_Line('esnap:'||v_esnap);
-    raise_application_error(-20002,'Insufficient statspack data in selected range. '||to_char(v_nSnaps)||' snapshosts available, at least 7 usable snapsthots are required');
+    raise_application_error(-20002,'Insufficient AWR data in selected range. '||to_char(v_nSnaps)||' snapshosts available, at least 7 usable snapsthots are required');
   else
     :bsnap := v_bsnap;
     :esnap := v_esnap; 
@@ -2199,7 +2199,7 @@ prompt </head>
 -- BODY
 ---------------------------------------------------
 prompt <body>
-prompt <h1> Statspack report for database: &&db_n., instance: &&inst_num., interval: &&bdate - &&edate </h1>
+prompt <h1> AWR trends report for database: &&db_n., instance: &&inst_num., interval: &&bdate - &&edate </h1>
 prompt <h2> Database info </h2>
 set markup html on head "" TABLE "class='sql' style='width:900px;'"
 set pagesize 100
