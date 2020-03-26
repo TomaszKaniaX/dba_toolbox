@@ -214,6 +214,8 @@ with snap as
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
+  and dbid = (select dbid from v$database)
+  and instance_number = (select instance_number from v$instance)  
 ),
 stat as
 (
@@ -370,6 +372,8 @@ with snap as
     ,startup_time,snapshot_exec_time_s
   from stats$snapshot
   where snap_id between :bsnap and :esnap
+  and dbid = (select dbid from v$database)
+  and instance_number = (select instance_number from v$instance)  
 ),
 stat as
 (
