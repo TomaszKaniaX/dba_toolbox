@@ -1138,6 +1138,8 @@ prompt       var data = new google.visualization.DataTable();;
 prompt       data.addColumn('datetime', 'Snapshot');;
 prompt       data.addColumn('string', 'Wait class');;
 prompt       data.addColumn('number', 'Wait time (minutes)');;
+prompt       data.addColumn('number', 'Wait time');;
+prompt       data.addColumn({type:'string',label:'Wait time (formatted)',role:'tooltip'});;
 prompt 
 prompt       data.addRows([
 with snap as
@@ -1208,7 +1210,9 @@ select
   decode(grn,1,'',',')||
   '[new Date('||chart_dt||'),'||
   ''''||w.wait_class||''','||
-  w.time_waited_min||']'
+  w.time_waited_min||','||
+  w.time_waited_min||','||
+  ''''||w.wait_class||': '||cast(numtodsinterval(w.time_waited_min,'MINUTE')  as interval day(0) to second(0))||''']'
 from chart_data w join snap using(snap_id,dbid,instance_number)
 order by snap_id,wait_class;
 
@@ -1244,13 +1248,13 @@ prompt            	tooltip: {textStyle: {fontSize: 11}},
 prompt            	hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
 prompt            	vAxis: {title: 'Value', textStyle: {fontSize: 10}, format: 'short'}
 prompt				},
-prompt		  	view: {columns: [0,2]}  
+prompt		  	view: {columns: [0,3,4]}  
 prompt        });;	
 prompt		var table = new google.visualization.ChartWrapper({
 prompt          chartType: 'Table',
 prompt          containerId: 'div_wait_class_single_tab',
 prompt          options: {width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}},
-prompt		  view: {columns: [0,1,2]}  
+prompt		  view: {columns: [0,1,2,4]}  
 prompt        });;	
 prompt
 prompt
