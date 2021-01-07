@@ -3,7 +3,7 @@
  * Run as statspack repository owner, typically "perfstat" user
  * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/sp_trends_charts.sql
  * Author: Tomasz Kania
- * Ver: 0.03
+ * Ver: 0.04
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/ 
 */
 
@@ -36,7 +36,7 @@ var nTopSqls number
 
 col bdate new_val bdate noprint
 col edate new_val edate noprint
-def DT_FMT_REP="Mon-DD"
+def DT_FMT_REP="YYYY-MM-DD"
 def DT_FMT_ISO="YYYY-MM-DD HH24:MI"
 var bdate varchar2(20)
 var edate varchar2(20)
@@ -175,6 +175,7 @@ prompt       google.charts.setOnLoadCallback(drawSGAChart);;
 prompt       google.charts.setOnLoadCallback(drawIOMBSFuncChart);; 
 prompt       google.charts.setOnLoadCallback(drawInstActChart);;
 prompt       google.charts.setOnLoadCallback(drawWClassChart);;
+prompt       google.charts.setOnLoadCallback(drawWClassChartSingle);;
 prompt       google.charts.setOnLoadCallback(drawTopWaitsChart);;
 prompt       google.charts.setOnLoadCallback(drawTopWaitsTab);;
 prompt       google.charts.setOnLoadCallback(drawWaitEvHistChart);;
@@ -1120,6 +1121,144 @@ prompt
 -- Wait Class chart end
 ---------------------------------------------------
 
+---------------------------------------------------
+-- Wait Class [single] chart
+---------------------------------------------------
+prompt     function drawWClassChartSingle() {
+prompt       var data = new google.visualization.DataTable();;
+prompt       data.addColumn('datetime', 'Snapshot');;
+prompt       data.addColumn('string', 'Wait class');;
+prompt       data.addColumn('number', 'Wait time (minutes)');;
+prompt       data.addColumn('number', 'Wait time');;
+prompt       data.addColumn({type:'string',label:'Wait time (formatted)',role:'tooltip'});;
+prompt 
+prompt       data.addRows([
+with snap as
+(
+  select /*+materialize*/ /*workaround for Bug 28749853*/ snap_id,dbid,instance_number
+    ,snap_time
+    ,row_number() over (order by snap_id desc) rn
+    ,to_char(snap_time,'YYYY')||','||to_char(to_number(to_char(snap_time,'MM'))-1)||','||to_char(snap_time,'DD,HH24,MI,SS') chart_dt
+    ,round(((snap_time-nvl(lag(snap_time) over (partition by startup_time order by snap_id),snap_time)))*24*60*60) ela_sec
+    ,startup_time,snapshot_exec_time_s
+  from stats$snapshot
+  where snap_id between :bsnap and :esnap
+  and dbid = (select dbid from v$database)
+  and instance_number = (select instance_number from v$instance)
+),
+stat_cpu as
+(
+SELECT snap_id,dbid,instance_number
+  ,upper(stat_name) stat_name
+  ,round((stm.value-lag(stm.value) over (partition by startup_time,tms.stat_name order by snap_id))/1000000/60,2) cpu_min
+FROM stats$sys_time_model stm join stats$time_model_statname tms using(stat_id)
+join snap using(snap_id,dbid,instance_number)
+where upper(stat_name) in('BACKGROUND CPU TIME','DB CPU')
+),
+stat as
+(
+  select snap_id,dbid,instance_number,wait_class,round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2) as time_waited_min
+  from
+  (
+    select
+    snap_id,dbid,instance_number,e.wait_class,sum(time_waited_micro) as time_waited_micro
+    FROM stats$system_event se join v$event_name e using (event_id)
+      join snap using(snap_id,dbid,instance_number)
+    where e.wait_class <> 'Idle'
+    group by snap_id,dbid,instance_number,e.wait_class
+  ) 
+), 
+chart_data as
+(
+select 
+  snap_id
+  ,dbid
+  ,instance_number 
+  ,wait_class
+  ,time_waited_min
+  ,row_number() over (order by snap_id,wait_class) grn
+from (
+  select
+    snap_id
+    ,dbid
+    ,instance_number 
+    ,wait_class
+    ,time_waited_min
+  from stat 
+  where time_waited_min is not null
+  union all
+  select
+    snap_id
+    ,dbid
+    ,instance_number 
+    ,stat_name
+    ,cpu_min
+  from stat_cpu
+  where cpu_min is not null
+  )   
+)
+select 
+  decode(grn,1,'',',')||
+  '[new Date('||chart_dt||'),'||
+  ''''||w.wait_class||''','||
+  w.time_waited_min||','||
+  w.time_waited_min||','||
+  ''''||w.wait_class||': '||cast(numtodsinterval(w.time_waited_min,'MINUTE')  as interval day(2) to second(0))||''']'
+from chart_data w join snap using(snap_id,dbid,instance_number)
+order by snap_id,wait_class;
+
+
+
+prompt       ]);;
+prompt
+prompt		var dashboard = new google.visualization.Dashboard(document.getElementById('div_wait_class_single_chart'));;
+prompt
+prompt        var filter = new google.visualization.ControlWrapper({
+prompt          controlType: 'CategoryFilter',
+prompt          containerId: 'div_wait_class_single_filter',
+prompt          options: {
+prompt            filterColumnLabel: 'Wait class',
+prompt			  ui: {
+prompt		        allowMultiple: false,
+prompt				allowNone: false
+prompt			  }
+prompt          },
+prompt			state: {selectedValues: ['User I/O']}
+prompt        });;
+prompt
+prompt       var chart = new google.visualization.ChartWrapper({
+prompt          chartType: 'LineChart',
+prompt          containerId: 'div_wait_class_single_chart',
+prompt          options: {
+prompt            	title: 'Time by wait class (per snapshot)',
+prompt            	backgroundColor: {fill: '#ffffff', stroke: '#0077b3', strokeWidth: 1},
+prompt            	explorer: {actions: ['dragToZoom', 'rightClickToReset'], axis:'horizontal', maxZoomIn: 0.2},
+prompt            	titleTextStyle: {fontSize: 16, bold: true},
+prompt            	focusTarget: 'category',
+prompt            	legend: {position: 'right', textStyle: {fontSize: 12}},
+prompt            	tooltip: {textStyle: {fontSize: 11}},
+prompt            	hAxis: {slantedText:true, slantedTextAngle:45, textStyle: {fontSize: 10}},
+prompt            	vAxis: {title: 'Value', textStyle: {fontSize: 10}, format: 'short'}
+prompt				},
+prompt		  	view: {columns: [0,3,4]}  
+prompt        });;	
+prompt		var table = new google.visualization.ChartWrapper({
+prompt          chartType: 'Table',
+prompt          containerId: 'div_wait_class_single_tab',
+prompt          options: {width: '100%', height: '100%',cssClassNames:{headerCell:'gcharttab'}},
+prompt		  view: {columns: [0,1,2,4]}  
+prompt        });;	
+prompt
+prompt
+prompt        dashboard.bind([filter], [chart, table]);;
+prompt        dashboard.draw(data);;	
+prompt
+prompt	}
+prompt
+
+---------------------------------------------------
+-- Wait Class [single] chart end
+---------------------------------------------------
 
 
 ---------------------------------------------------
@@ -2255,7 +2394,8 @@ prompt  <li><a class="toc" href="#h_time_model_stats">Time model system statisti
 prompt  <li><a class="toc" href="#h_time_model_det">Time model system stats (DB Time details)</a></li> 
 prompt  <li><a class="toc" href="#h_os_load">OS Load</a></li> 
 prompt  <li><a class="toc" href="#h_instance_activity">Instance activity</a></li> 
-prompt  <li><a class="toc" href="#h_wait_class_time">Time waited (by wait class)</a></li> 
+prompt  <li><a class="toc" href="#h_wait_class_time">Time waited (by wait class - stacked)</a></li> 
+prompt  <li><a class="toc" href="#h_wait_class_time_single">Time waited (by wait class - single)</a></li> 
 prompt  <li><a class="toc" href="#h_top_events">Top &&nTopEvents wait events</a></li> 
 prompt  <li><a class="toc" href="#h_wait_class_hist">Wait class histograms</a></li> 
 prompt  <li><a class="toc" href="#h_io_wait_ev_hist">IO wait events histograms</a></li> 
@@ -2297,11 +2437,20 @@ prompt </div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 
 
-prompt <h2 id="h_wait_class_time"> Time by wait class </h2>
+prompt <h2 id="h_wait_class_time"> Time by wait class (stacked) </h2>
 prompt <div id="div_wait_class_chart" style='width:1200px; height: 500px;'></div>
 prompt <font class="footnote">Graph note: drag to zoom, right click to reset. <br> Raw tabular data below (time in minutes):</font>
 prompt <div id="div_wait_class_tab" class="tab1200" style='height: 150px;'></div>
 prompt <a class="fnnav" href="#h_toc">back to top</a>
+
+prompt <h2 id="h_wait_class_time_single"> Time by wait class (single) </h2>
+prompt <div id="div_wait_class_single">
+prompt 	<div id="div_wait_class_single_filter" style='width:1200px;padding:10px;'></div>
+prompt 	<div id="div_wait_class_single_chart" style='width:1200px; height: 500px;'></div>
+prompt 	<div id="div_wait_class_single_tab" class="tab1200" style='height: 150px;'></div>	
+prompt </div>
+prompt <a class="fnnav" href="#h_toc">back to top</a>
+
 
 prompt <h2 id="h_top_events"> Top &&nTopEvents wait events </h2>
 prompt <div id="div_top_events_chart" style='width:1200px; height: 650px;'></div>
@@ -2474,6 +2623,7 @@ set markup html off
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 prompt 
 prompt <hr>
+prompt <div style='width:1200px; height: 1000px;'></div>
 prompt </body>
 prompt </html>
 prompt 

@@ -3,7 +3,7 @@
  * Run as user with select privileges on DBA_HIST% and V$ views
  * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/awr_trends_charts.sql
  * Author: Tomasz Kania
- * Ver: 0.03
+ * Ver: 0.04
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/
 */
 
@@ -37,7 +37,7 @@ var nTopSqls number
 
 col bdate new_val bdate noprint
 col edate new_val edate noprint
-def DT_FMT_REP="Mon-DD"
+def DT_FMT_REP="YYYY-MM-DD"
 def DT_FMT_ISO="YYYY-MM-DD HH24:MI"
 var bdate varchar2(20)
 var edate varchar2(20)
@@ -1212,7 +1212,7 @@ select
   ''''||w.wait_class||''','||
   w.time_waited_min||','||
   w.time_waited_min||','||
-  ''''||w.wait_class||': '||cast(numtodsinterval(w.time_waited_min,'MINUTE')  as interval day(0) to second(0))||''']'
+  ''''||w.wait_class||': '||cast(numtodsinterval(w.time_waited_min,'MINUTE')  as interval day(2) to second(0))||''']'
 from chart_data w join snap using(snap_id,dbid,instance_number)
 order by snap_id,wait_class;
 
@@ -2572,6 +2572,7 @@ set markup html off
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 prompt 
 prompt <hr>
+prompt <div style='width:1200px; height: 1000px;'></div>
 prompt </body>
 prompt </html>
 prompt 
