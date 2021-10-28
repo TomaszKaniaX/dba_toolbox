@@ -3,7 +3,7 @@
  * Run as user with select privileges on DBA_HIST% and V$ views
  * https://github.com/TomaszKaniaX/dba_toolbox/blob/master/awr_trends_charts.sql
  * Author: Tomasz Kania
- * Ver: 0.04
+ * Ver: 0.03
  * inspired by Carlos Sierra: https://carlos-sierra.net/2014/07/28/free-script-to-generate-a-line-chart-on-html/
 */
 
@@ -37,7 +37,7 @@ var nTopSqls number
 
 col bdate new_val bdate noprint
 col edate new_val edate noprint
-def DT_FMT_REP="YYYY-MM-DD"
+def DT_FMT_REP="Mon-DD"
 def DT_FMT_ISO="YYYY-MM-DD HH24:MI"
 var bdate varchar2(20)
 var edate varchar2(20)
@@ -1016,6 +1016,7 @@ with snap as
     ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
     ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
     ,startup_time
+    ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
     and dbid = (select dbid from v$database)
@@ -1025,14 +1026,30 @@ stat_cpu as
 (
 SELECT snap_id,dbid,instance_number
   ,upper(stat_name) stat_name
-  ,round((value-lag(value) over (partition by startup_time,stat_name order by snap_id))/1000000/60,2) cpu_min
+  ,case 
+      when value-lag(value) over (partition by startup_time,stat_name order by snap_id) > 0 then
+         round((value-lag(value) over (partition by startup_time,stat_name order by snap_id))/1000000/60,2)
+      else
+         --round((value)/1000000/60,2)
+	null
+   end cpu_min
+  --,round((value-lag(value) over (partition by startup_time,stat_name order by snap_id))/1000000/60,2) cpu_min
 FROM dba_hist_sys_time_model
-join snap using(snap_id,dbid,instance_number)
+   join snap using(snap_id,dbid,instance_number)
 where upper(stat_name) in('BACKGROUND CPU TIME','DB CPU')
+   and snap.restart = 0 
 ),
 stat as
 (
-  select snap_id,dbid,instance_number,wait_class,round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2) as time_waited_min
+  select snap_id,dbid,instance_number,wait_class
+   ,case 
+      when time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id) > 0 then
+         round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2)
+      else
+         --round(time_waited_micro/1e6/60,2)
+	null
+    end time_waited_min
+   --,round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2) as time_waited_min
   from
   (
     select
@@ -1040,6 +1057,7 @@ stat as
     from dba_hist_system_event  
       join snap using(snap_id,dbid,instance_number)
     where wait_class <> 'Idle'
+      and snap.restart = 0 
     group by snap_id,dbid,instance_number,wait_class
   ) 
 ), 
@@ -1102,6 +1120,7 @@ select
   w.user_io||
   ']'||case when rn=1 then '' else ',' end
 from chart_data_waits w join chart_data_cpu c using(snap_id,dbid,instance_number) join snap using(snap_id,dbid,instance_number)
+where snap.restart = 0 
 order by snap_id;
 
 prompt       ]);;
@@ -1150,6 +1169,7 @@ with snap as
     ,to_char(cast(end_interval_time as date),'YYYY')||','||to_char(to_number(to_char(cast(end_interval_time as date),'MM'))-1)||','||to_char(cast(end_interval_time as date),'DD,HH24,MI') chart_dt
     ,round(((cast(end_interval_time as date)-nvl(lag(cast(end_interval_time as date)) over (partition by startup_time order by snap_id),cast(end_interval_time as date))))*24*60*60) ela_sec
     ,startup_time
+    ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
     and dbid = (select dbid from v$database)
@@ -1159,14 +1179,29 @@ stat_cpu as
 (
 SELECT snap_id,dbid,instance_number
   ,upper(stat_name) stat_name
-  ,round((value-lag(value) over (partition by startup_time,stat_name order by snap_id))/1000000/60,2) cpu_min
+  ,case 
+      when value-lag(value) over (partition by startup_time,stat_name order by snap_id) > 0 then
+         round((value-lag(value) over (partition by startup_time,stat_name order by snap_id))/1000000/60,2)
+      else
+         --round((value)/1000000/60,2)
+	null
+   end cpu_min 
+  --,round((value-lag(value) over (partition by startup_time,stat_name order by snap_id))/1000000/60,2) cpu_min
 FROM dba_hist_sys_time_model
 join snap using(snap_id,dbid,instance_number)
 where upper(stat_name) in('BACKGROUND CPU TIME','DB CPU')
 ),
 stat as
 (
-  select snap_id,dbid,instance_number,wait_class,round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2) as time_waited_min
+  select snap_id,dbid,instance_number,wait_class
+     ,case 
+      when time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id) > 0 then
+         round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2)
+      else
+         --round(time_waited_micro/1e6/60,2)
+         null
+    end time_waited_min  
+    --,round((time_waited_micro-lag(time_waited_micro) over(partition by wait_class order by snap_id))/1e6/60,2) as time_waited_min
   from
   (
     select
@@ -1212,8 +1247,9 @@ select
   ''''||w.wait_class||''','||
   w.time_waited_min||','||
   w.time_waited_min||','||
-  ''''||w.wait_class||': '||cast(numtodsinterval(w.time_waited_min,'MINUTE')  as interval day(2) to second(0))||''']'
+  ''''||w.wait_class||': '||cast(numtodsinterval(w.time_waited_min,'MINUTE')  as interval day(3) to second(0))||''']'
 from chart_data w join snap using(snap_id,dbid,instance_number)
+where restart = 0
 order by snap_id,wait_class;
 
 
@@ -1378,16 +1414,17 @@ begin
   close c_events;
   for i in 1..v_events.count
     loop
-      v_pivot := v_pivot||''''||v_events(i)||''' as "'||substr(v_events(i),1,25)||'",';
-      v_dyn_cols := v_dyn_cols||'"'||substr(v_events(i),1,25)||'",';
+      v_pivot := v_pivot||''''||v_events(i)||''' as "'||substr(v_events(i),1,30)||'",';
+      v_dyn_cols := v_dyn_cols||'"'||substr(v_events(i),1,30)||'",';
       --Dbms_Output.Put_Line('event: '||v_events(i));
-      v_gchart_cols := v_gchart_cols||'data.addColumn(''number'', '''||v_events(i)||''');;'||chr(10);
+      --v_gchart_cols := v_gchart_cols||'data.addColumn(''number'', '''||v_events(i)||''');;'||chr(10);
+      Dbms_Output.Put_Line('data.addColumn(''number'', '''||v_events(i)||''');;');
     end loop;
   v_pivot := replace(rtrim(v_pivot,','),chr(38),'and');
   v_dyn_cols := replace(rtrim(v_dyn_cols,','),chr(38),'and');
   --dbms_output.put_line(v_pivot);
   --dbms_output.put_line(v_dyn_cols);
-  dbms_output.put_line(v_gchart_cols);
+  --dbms_output.put_line(v_gchart_cols);
   dbms_output.put_line('');
   dbms_output.put_line('data.addRows([');
 
@@ -1726,13 +1763,17 @@ with snap as
 ),
 ev_hist as
 (
+select snap_id,dbid,instance_number,rn,event_name,wtmil,wait_count
+,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,event_id)*100,2) pct
+from(
 select snap_id,dbid,instance_number
   ,row_number() over (order by snap_id desc,event_name desc) rn
+  ,event_id
   ,event_name
   ,wait_time_milli wtmil
   --,wait_count
-  --,eh.wait_count-lag(eh.wait_count) over(partition by snap.startup_time,event_id,eh.wait_time_milli order by snap_id) wait_count
-  ,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,event_id)*100,2) pct 
+  ,wait_count-lag(wait_count) over(partition by snap.startup_time,event_id,wait_time_milli order by snap_id) wait_count
+  --,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,event_id)*100,2) pct 
 from dba_hist_event_histogram 
   join snap using(snap_id,dbid,instance_number)
 where 
@@ -1749,6 +1790,7 @@ where
     ,'flashback log file write'
     ,'control file sequential read'
   )
+)
 ),
 chart_data as
 (
@@ -1889,13 +1931,20 @@ with snap as
 ),
 ev_hist as
 (
+select snap_id,dbid,instance_number,wait_class,wtmil
+,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,wait_class)*100,2) pct
+from 
+( 
 SELECT snap_id,dbid,instance_number
   ,wait_class
   ,wait_time_milli wtmil
-  ,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,wait_class)*100,2) pct
+  --,wait_count
+  ,wait_count-lag(wait_count) over(partition by snap.startup_time,wait_class,wait_time_milli order by snap_id) wait_count
+  --,Round(Ratio_To_Report(wait_count) over(PARTITION BY snap_id,instance_number,wait_class)*100,2) pct
 FROM (SELECT snap_id,dbid,instance_number
         ,wait_class
-        ,wait_time_milli 
+        --,wait_class_id
+        ,wait_time_milli
         ,sum(wait_count) wait_count
       FROM dba_hist_event_histogram
       where wait_class <> 'Idle'
@@ -1904,6 +1953,7 @@ FROM (SELECT snap_id,dbid,instance_number
         ,wait_time_milli
       )
 join snap using(snap_id,dbid,instance_number)
+)
 ),
 chart_data as
 (
@@ -2572,7 +2622,6 @@ set markup html off
 prompt <a class="fnnav" href="#h_toc">back to top</a>
 prompt 
 prompt <hr>
-prompt <div style='width:1200px; height: 1000px;'></div>
 prompt </body>
 prompt </html>
 prompt 
