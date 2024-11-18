@@ -19,8 +19,10 @@ set sqlblanklines on
 col global_name new_val db_n noprint
 col instance_name new_val inst_name noprint
 col instance_number new_val inst_num noprint
+col dbid_current new_val dbid noprint
 select global_name from global_name;
 select instance_name,trim(instance_number) as instance_number from v$instance;
+select dbid as dbid_current from v$database;
 
 --avoid comma as decimal separator in outputs
 alter session set nls_numeric_characters='.,';
@@ -31,13 +33,15 @@ col esnap new_val esnap noprint
 
 var bsnap number
 var esnap number
+var dbid number
+var inst_id number
 var nTopEvents number
 var nTopSqls number
 
 
 col bdate new_val bdate noprint
 col edate new_val edate noprint
-def DT_FMT_REP="Mon-DD"
+def DT_FMT_REP="YYYY-MM-DD"
 def DT_FMT_ISO="YYYY-MM-DD HH24:MI"
 var bdate varchar2(20)
 var edate varchar2(20)
@@ -65,6 +69,28 @@ select
 from dba_hist_snapshot;
 
 
+col dbid form 999999999999
+col inst_id form 99999
+col db_name form A10
+col host_name form A30
+col db_unique_name form A20
+col database_role form A16
+set pagesize 10
+prompt ==================================================================
+prompt Available databases/instances in AWR repository
+prompt ==================================================================
+select distinct dbid,instance_number inst_id,db_name,host_name,db_unique_name,database_role 
+from dba_hist_database_instance;
+set pagesize 0
+
+prompt
+prompt ==================================================================
+ACCEPT dbid  DEFAULT '&dbid'  PROMPT 'Select DBID  [&dbid]: '
+ACCEPT inst_id  DEFAULT '&inst_num'  PROMPT 'Select Instance Number  [&inst_num]: '
+prompt ==================================================================
+
+select distinct 'Selected DB: '||db_unique_name as selected_db, db_unique_name as global_name from dba_hist_database_instance where dbid = &dbid and instance_number = &inst_id; 
+
 
 declare 
   v_nSnaps number;
@@ -73,7 +99,9 @@ declare
   v_date1 date;
   v_date2 date;
 begin
-  select count(*),min(end_interval_time), max(end_interval_time) into v_nSnaps,v_OldestSnap,v_NewestSnap from dba_hist_snapshot;  
+  :dbid := &dbid;
+  :inst_id := &inst_id;
+  select count(*),min(end_interval_time), max(end_interval_time) into v_nSnaps,v_OldestSnap,v_NewestSnap from dba_hist_snapshot where dbid=:dbid and instance_number=:inst_id;  
   if v_nSnaps < 8 then
     raise_application_error(-20001,'Insufficient data in AWR repository. '||to_char(v_nSnaps)||' snapshosts available, at least 8 snapsthots are required');
   else
@@ -81,7 +109,8 @@ begin
       greatest(trunc(sysdate)-3,min(end_interval_time)),
       least(trunc(sysdate),max(end_interval_time))
       into v_date1,v_date2  
-    from dba_hist_snapshot;
+    from dba_hist_snapshot
+	where  dbid=:dbid and instance_number=:inst_id;
     :bdate := to_char(v_date1,'&&DT_FMT_ISO');
     :edate := to_char(v_date2,'&&DT_FMT_ISO');
    
@@ -117,7 +146,7 @@ begin
   select min(snap_id) into v_bsnap 
   from
   (
-    select snap_id,lag(snap_id) over(order by end_interval_time) prev_snap,lead(snap_id) over(order by end_interval_time) next_snap,end_interval_time from dba_hist_snapshot
+    select snap_id,lag(snap_id) over(order by end_interval_time) prev_snap,lead(snap_id) over(order by end_interval_time) next_snap,end_interval_time from dba_hist_snapshot where dbid=:dbid and instance_number=:inst_id
   ) 
   where 
     end_interval_time >= to_date('&&bdate','&&DT_FMT_REP')
@@ -127,7 +156,7 @@ begin
   select max(snap_id) into v_esnap 
   from
   (
-    select snap_id,lag(snap_id) over(order by end_interval_time) prev_snap,lead(snap_id) over(order by end_interval_time) next_snap,end_interval_time from dba_hist_snapshot
+    select snap_id,lag(snap_id) over(order by end_interval_time) prev_snap,lead(snap_id) over(order by end_interval_time) next_snap,end_interval_time from dba_hist_snapshot where dbid=:dbid and instance_number=:inst_id 
   ) 
   where 
     end_interval_time < to_date('&&edate','&&DT_FMT_REP')+1
@@ -135,7 +164,8 @@ begin
 
   select count(*) into v_nSnaps
   from dba_hist_snapshot
-  where snap_id between v_bsnap and v_esnap;
+  where snap_id between v_bsnap and v_esnap
+	and dbid=&dbid and instance_number=&inst_id;
   
   if v_nSnaps < 7 then
     Dbms_Output.Put_Line('bsnap:'||v_bsnap);
@@ -229,8 +259,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 stat as
 (
@@ -387,8 +417,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)  
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 stat as
 (
@@ -508,8 +538,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),stat as
 (
 select 
@@ -623,8 +653,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),sga_stat as
 (
 select snap_id,dbid,instance_number,rn,chart_dt,nvl(pool,name) pool,round(bytes/1024/1024) mb 
@@ -724,8 +754,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),iostat as
 (
 select 
@@ -870,8 +900,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ), stat as
 (
 select 
@@ -1019,8 +1049,8 @@ with snap as
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 stat_cpu as
 (
@@ -1172,8 +1202,8 @@ with snap as
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 stat_cpu as
 (
@@ -1339,8 +1369,8 @@ declare
         ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
       from dba_hist_snapshot
       where snap_id between :bsnap and :esnap
-        and dbid = (select dbid from v$database)
-        and instance_number = (select instance_number from v$instance)
+		and dbid = :dbid
+		and instance_number = :inst_id
     ),
     stat_cpu as
     (
@@ -1439,8 +1469,8 @@ begin
         ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
       from dba_hist_snapshot
       where snap_id between :bsnap and :esnap
-        and dbid = (select dbid from v$database)
-        and instance_number = (select instance_number from v$instance)
+            and dbid = :dbid
+			and instance_number = :inst_id
     ),
     stat_cpu as
     (
@@ -1521,6 +1551,8 @@ begin
 
     dbms_sql.bind_variable(v_cid, 'bsnap', :bsnap);
     dbms_sql.bind_variable(v_cid, 'esnap', :esnap);
+    dbms_sql.bind_variable(v_cid, 'dbid', :dbid);
+    dbms_sql.bind_variable(v_cid, 'inst_id', :inst_id);	
     dbms_sql.bind_variable(v_cid, 'nTopEvents', :nTopEvents);
 
     dbms_sql.describe_columns(
@@ -1626,8 +1658,8 @@ with snap as
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 stat_cpu as
 (
@@ -1758,8 +1790,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 ev_hist as
 (
@@ -1926,8 +1958,8 @@ with snap as
     ,startup_time
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 ev_hist as
 (
@@ -2105,8 +2137,8 @@ with snap as
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 stat_cpu as
 (
@@ -2133,8 +2165,8 @@ sqls as
   select snap_id,dbid,instance_number
     ,sql_id
     ,parsing_schema_name
-    ,module
-    ,action
+    ,replace(module,'''','') module
+    ,replace(action,'''','') action
     ,plan_hash_value
     ,executions_delta execs
     ,buffer_gets_delta gets
@@ -2563,8 +2595,8 @@ with snap as
     ,case when nvl(lag(startup_time) over(order by startup_time),startup_time) <> startup_time then 1 else 0 end restart
   from dba_hist_snapshot
   where snap_id between :bsnap and :esnap
-    and dbid = (select dbid from v$database)
-    and instance_number = (select instance_number from v$instance)
+    and dbid = :dbid
+    and instance_number = :inst_id
 ),
 sqls as
 (
